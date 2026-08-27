@@ -24,12 +24,29 @@ read-only** — see [Safety](#safety).
 
 ---
 
+## Requirements
+
+- A Linux host with **Python 3.9+**, reachable by your monitoring system.
+- A **Firewalla MSP** account. The per-port data comes from the MSP cloud API,
+  so a standalone box with no MSP subscription has nothing to read.
+- Only two Python dependencies (`pysnmp`, `PyYAML`) — both pulled in
+  automatically below.
+
 ## Quick start
+
+Not on PyPI yet, so install from a clone. Cloning is worth it anyway: you get
+`install.sh` for the systemd setup and the vendor MIB to load into your NMS.
 
 ```bash
 # 1. Install
-sudo apt install pipx                     # or: python3 -m pip install --user pipx
-sudo pipx --global install firewalla-snmp-proxy
+git clone https://github.com/kdesch5000/firewalla-snmp-proxy
+cd firewalla-snmp-proxy
+
+sudo python3 -m venv /opt/firewalla-snmp-proxy-venv
+sudo /opt/firewalla-snmp-proxy-venv/bin/pip install .
+sudo ln -sf /opt/firewalla-snmp-proxy-venv/bin/firewalla-snmp-proxy /usr/local/bin/
+
+firewalla-snmp-proxy --version
 
 # 2. Get an API token from the Firewalla MSP web console
 #    (account settings -> API tokens), then:
@@ -45,6 +62,19 @@ firewalla-snmp-proxy check -c config.yaml
 firewalla-snmp-proxy run -c config.yaml
 ```
 
+A venv rather than a bare `pip install` because current distros are
+[PEP 668](https://peps.python.org/pep-0668/)-managed and will refuse to install
+into system Python. If you would rather not manage one, `pipx` reads straight
+from the repo:
+
+```bash
+sudo apt install pipx
+sudo pipx --global install git+https://github.com/kdesch5000/firewalla-snmp-proxy
+```
+
+Step 4 binds no sockets, so it is safe to run while something else is already
+listening on the port.
+
 Then, from anywhere that can reach the proxy:
 
 ```bash
@@ -54,19 +84,49 @@ snmpwalk -v2c -c public 127.0.0.1:16100 1.3.6.1.2.1.2.2
 `--domain` is the hostname of your MSP web console: if you reach MSP at
 `https://dn-abc123.firewalla.net/`, use `dn-abc123.firewalla.net`.
 
+If the walk times out, check `listen.address` — it defaults to `127.0.0.1`,
+which accepts local traffic only. See
+[Monitoring system recipes](#monitoring-system-recipes) if your NMS is on
+another host.
+
 ### Install as a service
 
+From the same clone:
+
 ```bash
-git clone https://github.com/kdesch5000/firewalla-snmp-proxy
-cd firewalla-snmp-proxy
-sudo ./install.sh --service
+sudo ./install.sh --service          # or: --service --user snmpproxy
 ```
 
 The systemd unit is **generated** from the detected binary path, service user
 and config location — there is nothing to hand-edit. It creates a locked-down
 `firewalla-snmp-proxy` system user, a 0640 root-owned environment file for your
-token, and a state directory for counter persistence. `install.sh` prints the
-remaining steps when it finishes.
+token, and a state directory for counter persistence:
+
+| | |
+|---|---|
+| Config | `/etc/firewalla-snmp-proxy/config.yaml` |
+| Token (`EnvironmentFile`) | `/etc/firewalla-snmp-proxy/env` |
+| Counter state | `/var/lib/firewalla-snmp-proxy/counters.json` |
+
+Put your token in the env file as `FIREWALLA_MSP_TOKEN=<token>`, then generate
+the config at the system path and start it:
+
+```bash
+export FIREWALLA_MSP_TOKEN=<token>
+sudo firewalla-snmp-proxy init --domain <your>.firewalla.net \
+     -o /etc/firewalla-snmp-proxy/config.yaml --force
+firewalla-snmp-proxy check -c /etc/firewalla-snmp-proxy/config.yaml
+sudo systemctl enable --now firewalla-snmp-proxy
+journalctl -u firewalla-snmp-proxy -f
+```
+
+`install.sh` prints these same steps when it finishes, and
+`sudo ./install.sh --uninstall` reverses it.
+
+The token is never accepted as a command-line argument, so it cannot leak into
+your shell history or `ps` output. It is resolved from `FIREWALLA_MSP_TOKEN`,
+then `token_file`, then the config file — with a warning if the file holding it
+is group- or world-readable.
 
 ---
 
