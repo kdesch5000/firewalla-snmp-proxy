@@ -1,0 +1,338 @@
+{
+  "id": "20:6D:31:00:00:01",
+  "name": "Firewalla.Switch.Example",
+  "ip": "192.0.2.10",
+  "online": true,
+  "model": "fwsw-B",
+  "version": "0.6.27",
+  "activeBranch": "stable",
+  "uplink": {
+    "mac": "20:6D:31:00:00:02",
+    "type": "box",
+    "port": "eth1",
+    "localPort": "1",
+    "connectionType": "ethernet"
+  },
+  "poe": {
+    "used": 10.5,
+    "budgetUtil": 114
+  },
+  "acl": {
+    "count": 1229,
+    "max": 256,
+    "tracking": 1222,
+    "control": 7
+  },
+  "health": {
+    "fanStatus": "none",
+    "temperature": 0,
+    "healthy": "Healthy"
+  },
+  "reservedIP": "192.0.2.10",
+  "intf": "11111111-1111-1111-1111-111111111111",
+  "hostname": "firewalla.switch.example",
+  "ipv6": [],
+  "allocation": "static",
+  "firstFound": 1783717259.812,
+  "lastActive": 1787861259,
+  "ports": [
+    {
+      "port": "1",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "poeStatus": "searching",
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "txBytes": 900277046548,
+      "rxBytes": 3519353730267,
+      "txUnicastFrames": 1254133436,
+      "rxUnicastFrames": 2909389940,
+      "txMulticastFrames": 32966282,
+      "rxMulticastFrames": 7427130,
+      "txBroadcastFrames": 24067814,
+      "rxBroadcastFrames": 9819150,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "trunk"
+      }
+    },
+    {
+      "port": "2",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "poeStatus": "searching",
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "txBytes": 1036305435905,
+      "rxBytes": 173016558957,
+      "txUnicastFrames": 974758416,
+      "rxUnicastFrames": 511456398,
+      "txMulticastFrames": 31280959,
+      "rxMulticastFrames": 9107509,
+      "txBroadcastFrames": 15814666,
+      "rxBroadcastFrames": 18071278,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "trunk"
+      }
+    },
+    {
+      "port": "3",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "poe": true,
+      "poePower": 5.9,
+      "poeMode": "802.3at",
+      "poeStatus": "delivering",
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "txBytes": 1000313136423,
+      "rxBytes": 139510264689,
+      "txUnicastFrames": 872157884,
+      "rxUnicastFrames": 237598162,
+      "txMulticastFrames": 32152216,
+      "rxMulticastFrames": 8729557,
+      "txBroadcastFrames": 31597021,
+      "rxBroadcastFrames": 2287864,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "trunk"
+      }
+    },
+    {
+      "port": "4",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "poe": true,
+      "poePower": 4.6,
+      "poeMode": "802.3af",
+      "poeStatus": "delivering",
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "txBytes": 66548858007,
+      "rxBytes": 12658048424,
+      "txUnicastFrames": 62634403,
+      "rxUnicastFrames": 37956926,
+      "txMulticastFrames": 39879098,
+      "rxMulticastFrames": 509994,
+      "txBroadcastFrames": 33625533,
+      "rxBroadcastFrames": 260275,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "trunk"
+      }
+    },
+    {
+      "port": "5",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "poeStatus": "searching",
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "txBytes": 893294307597,
+      "rxBytes": 18572063427,
+      "txUnicastFrames": 637166848,
+      "rxUnicastFrames": 113903225,
+      "txMulticastFrames": 34849289,
+      "rxMulticastFrames": 5525693,
+      "txBroadcastFrames": 33414648,
+      "rxBroadcastFrames": 461486,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "trunk"
+      }
+    },
+    {
+      "port": "6",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "poeStatus": "searching",
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "txBytes": 447028032422,
+      "rxBytes": 516376583095,
+      "txUnicastFrames": 473833865,
+      "rxUnicastFrames": 536778135,
+      "txMulticastFrames": 33831437,
+      "rxMulticastFrames": 6556469,
+      "txBroadcastFrames": 32115838,
+      "rxBroadcastFrames": 1768780,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "trunk"
+      }
+    },
+    {
+      "port": "7",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "poeStatus": "searching",
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "txBytes": 197931268436,
+      "rxBytes": 99343474621,
+      "txUnicastFrames": 179636772,
+      "rxUnicastFrames": 123133193,
+      "txMulticastFrames": 38923441,
+      "rxMulticastFrames": 1464404,
+      "txBroadcastFrames": 32791095,
+      "rxBroadcastFrames": 1093693,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "trunk"
+      }
+    },
+    {
+      "port": "8",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "poeStatus": "searching",
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "txBytes": 10025670973,
+      "rxBytes": 201449743,
+      "txUnicastFrames": 6626767,
+      "rxUnicastFrames": 2632523,
+      "txMulticastFrames": 3572568,
+      "rxMulticastFrames": 987,
+      "txBroadcastFrames": 3194577,
+      "rxBroadcastFrames": 64,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "access",
+        "intf": "22222222-2222-2222-2222-222222222222"
+      }
+    },
+    {
+      "port": "9",
+      "linkUp": false,
+      "stp": {
+        "portRole": "disabled",
+        "portState": "discarding"
+      },
+      "sfpInfo": {
+        "present": false,
+        "connectorType": "N/A",
+        "nominalBitRate": "N/A",
+        "vendorOui": "N/A"
+      },
+      "txBytes": 0,
+      "rxBytes": 0,
+      "txUnicastFrames": 0,
+      "rxUnicastFrames": 0,
+      "txMulticastFrames": 0,
+      "rxMulticastFrames": 0,
+      "txBroadcastFrames": 0,
+      "rxBroadcastFrames": 0,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "trunk"
+      }
+    },
+    {
+      "port": "10",
+      "linkUp": true,
+      "linkSpeed": 1000,
+      "stp": {
+        "portRole": "designated",
+        "portState": "forwarding"
+      },
+      "sfpInfo": {
+        "present": true,
+        "connectorType": "LC  [ 0x07 ]",
+        "nominalBitRate": "1.3 Gbps",
+        "vendorOui": "0x00 0x00 0x00"
+      },
+      "txBytes": 42638264559,
+      "rxBytes": 10888517270,
+      "txUnicastFrames": 27963712,
+      "rxUnicastFrames": 15261323,
+      "txMulticastFrames": 28603052,
+      "rxMulticastFrames": 702413,
+      "txBroadcastFrames": 22230685,
+      "rxBroadcastFrames": 116555,
+      "txDiscardFrames": 0,
+      "rxDiscardFrames": 0,
+      "txErrorFrames": 0,
+      "rxErrorFrames": 0,
+      "statsSinceTs": 1785318062,
+      "settings": {
+        "type": "access",
+        "intf": "11111111-1111-1111-1111-111111111111"
+      }
+    }
+  ],
+  "systemStatus": {
+    "firmwareVersion": "1.12.0",
+    "modelName": "Firewalla-Switch-SE",
+    "serialNumber": "SWSE00EXAMPLE001",
+    "hardwareVersion": "v1.0.0",
+    "uptime": 2030645,
+    "fanStatus": "none",
+    "temperature": 0,
+    "protocolVersion": "v3.03.572"
+  },
+  "firmwareInfo": {
+    "activePartition": 1,
+    "partition1Version": "IMG-1.12.0",
+    "image1Size": 23841870,
+    "image1CreatedTime": "2026/7/20_09:15",
+    "partition2Version": "IMG-1.11.2",
+    "image2Size": 23865931,
+    "image2CreatedTime": "2026/7/17_16:19"
+  },
+  "gid": "00000000-0000-0000-0000-000000000000",
+  "mac": "20:6D:31:00:00:01"
+}

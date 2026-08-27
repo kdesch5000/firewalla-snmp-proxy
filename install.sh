@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+#
+# Install firewalla-snmp-proxy as a systemd service.
+#
+# The systemd unit is generated from the values detected here -- the binary
+# path, the service user, the config location -- so there is nothing to
+# hand-edit afterwards.
+#
+#   sudo ./install.sh --service
+#   sudo ./install.sh --service --user snmpproxy
+#   sudo ./install.sh --uninstall
+#
+set -euo pipefail
+
+SERVICE_NAME="firewalla-snmp-proxy"
+CONFIG_DIR="/etc/${SERVICE_NAME}"
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
+ENV_FILE="${CONFIG_DIR}/env"
+STATE_DIR="/var/lib/${SERVICE_NAME}"
+UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+MIB_DIR="/usr/share/snmp/mibs"
+
+RUN_USER="${SERVICE_NAME}"
+DO_SERVICE=0
+DO_UNINSTALL=0
+
+die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+info() { printf '\033[32m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
+
+usage() {
+    sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --service)   DO_SERVICE=1; shift ;;
+        --uninstall) DO_UNINSTALL=1; shift ;;
+        --user)      RUN_USER="${2:?--user needs a value}"; shift 2 ;;
+        -h|--help)   usage ;;
+        *)           die "unknown option: $1 (try --help)" ;;
+    esac
+done
+
+[[ $EUID -eq 0 ]] || die "must run as root (use sudo)"
+
+# ---------------------------------------------------------------- uninstall
+if [[ $DO_UNINSTALL -eq 1 ]]; then
+    info "Stopping and disabling ${SERVICE_NAME}"
+    systemctl disable --now "${SERVICE_NAME}" 2>/dev/null || true
+    rm -f "${UNIT_FILE}"
+    systemctl daemon-reload
+    # Deliberately NOT removed: the config (holds your token) and the state
+    # directory (holds counter offsets -- deleting it causes one spurious
+    # spike in your graphs on next start).
+    info "Removed the unit file."
+    info "Left in place: ${CONFIG_DIR} and ${STATE_DIR}"
+    info "  Remove them yourself if you really want to: rm -rf ${CONFIG_DIR} ${STATE_DIR}"
+    exit 0
+fi
+
+# ------------------------------------------------------------------ locate
+BIN=""
+for candidate in \
+    "$(command -v ${SERVICE_NAME} 2>/dev/null || true)" \
+    "/usr/local/bin/${SERVICE_NAME}" \
+    "/root/.local/bin/${SERVICE_NAME}" \
+    "${HOME:-/root}/.local/bin/${SERVICE_NAME}"
+do
+    [[ -n "$candidate" && -x "$candidate" ]] && { BIN="$candidate"; break; }
+done
+
+if [[ -z "$BIN" ]]; then
+    die "cannot find the '${SERVICE_NAME}' executable.
+Install it first, for example:
+
+    sudo apt install pipx        # or: python3 -m pip install --user pipx
+    sudo pipx --global install firewalla-snmp-proxy
+
+or from a checkout of this repository:
+
+    sudo pipx --global install ."
+fi
+info "Using executable: ${BIN}"
+
+"$BIN" --version >/dev/null 2>&1 || die "${BIN} --version failed; is the install broken?"
+
+# -------------------------------------------------------------------- user
+if id -u "${RUN_USER}" >/dev/null 2>&1; then
+    info "Service user ${RUN_USER} already exists"
+else
+    info "Creating system user ${RUN_USER}"
+    useradd --system --no-create-home --shell /usr/sbin/nologin "${RUN_USER}"
+fi
+
+# ------------------------------------------------------------------- dirs
+install -d -m 0750 -o root         -g "${RUN_USER}" "${CONFIG_DIR}"
+install -d -m 0750 -o "${RUN_USER}" -g "${RUN_USER}" "${STATE_DIR}"
+
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+    if [[ -f "config.example.yaml" ]]; then
+        install -m 0640 -o root -g "${RUN_USER}" config.example.yaml "${CONFIG_FILE}"
+        warn "Installed an EXAMPLE config at ${CONFIG_FILE} -- you must edit it."
+    else
+        warn "No config at ${CONFIG_FILE}. Create one with 'firewalla-snmp-proxy init'."
+    fi
+else
+    info "Keeping existing ${CONFIG_FILE}"
+    chown root:"${RUN_USER}" "${CONFIG_FILE}"
+    chmod 0640 "${CONFIG_FILE}"
+fi
+
+# The token lives here rather than in the config, so the config can be copied
+# around or pasted into a bug report without leaking a credential.
+if [[ ! -f "${ENV_FILE}" ]]; then
+    cat > "${ENV_FILE}" <<'ENVEOF'
+# Environment for firewalla-snmp-proxy.
+# Put your Firewalla MSP API token here. This file is mode 0640, root-owned,
+# readable only by the service group.
+FIREWALLA_MSP_TOKEN=
+ENVEOF
+    chown root:"${RUN_USER}" "${ENV_FILE}"
+    chmod 0640 "${ENV_FILE}"
+    warn "Add your API token to ${ENV_FILE}"
+else
+    info "Keeping existing ${ENV_FILE}"
+    chmod 0640 "${ENV_FILE}"
+fi
+
+# -------------------------------------------------------------------- MIB
+if [[ -f "mibs/FIREWALLA-SNMP-PROXY-MIB.txt" ]]; then
+    install -d -m 0755 "${MIB_DIR}"
+    install -m 0644 mibs/FIREWALLA-SNMP-PROXY-MIB.txt "${MIB_DIR}/"
+    info "Installed MIB to ${MIB_DIR}/FIREWALLA-SNMP-PROXY-MIB.txt"
+fi
+
+# ------------------------------------------------------------------- unit
+if [[ $DO_SERVICE -eq 1 ]]; then
+    info "Writing ${UNIT_FILE}"
+    cat > "${UNIT_FILE}" <<UNITEOF
+# Generated by ${SERVICE_NAME} install.sh on $(date -Is)
+# Regenerate with: sudo ./install.sh --service
+[Unit]
+Description=Firewalla Switch SNMP proxy
+Documentation=https://github.com/kdesch5000/firewalla-snmp-proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${RUN_USER}
+Group=${RUN_USER}
+EnvironmentFile=${ENV_FILE}
+ExecStart=${BIN} run --config ${CONFIG_FILE}
+Restart=on-failure
+RestartSec=15s
+
+# The proxy only needs outbound HTTPS and its own UDP listeners, so it can be
+# locked down hard.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+# The one writable path: the counter state file.
+ReadWritePaths=${STATE_DIR}
+
+# Default listen ports are >1024, so no privileged-port capability is needed.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+    systemctl daemon-reload
+    info "Unit installed. Next steps:"
+    echo
+    echo "  1. Put your API token in:   ${ENV_FILE}"
+    echo "  2. Generate a config:"
+    echo "       export FIREWALLA_MSP_TOKEN=<token>"
+    echo "       ${BIN} init --domain <your>.firewalla.net -o ${CONFIG_FILE} --force"
+    echo "  3. Validate it:             ${BIN} check -c ${CONFIG_FILE}"
+    echo "  4. Start it:                systemctl enable --now ${SERVICE_NAME}"
+    echo "  5. Watch it:                journalctl -u ${SERVICE_NAME} -f"
+    echo
+else
+    info "Files installed. Re-run with --service to create the systemd unit."
+fi

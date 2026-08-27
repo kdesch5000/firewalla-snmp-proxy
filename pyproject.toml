@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "firewalla-snmp-proxy"
+version = "2.0.0"
+description = "Monitor a Firewalla Switch over SNMP with any monitoring system"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Kristian Desch" }]
+keywords = ["snmp", "firewalla", "monitoring", "observium", "librenms", "zabbix"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: No Input/Output (Daemon)",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Networking :: Monitoring",
+]
+
+# Deliberately minimal. The MSP API client uses only stdlib HTTP, so the whole
+# dependency tree is pysnmp (plus its pyasn1) and PyYAML for the config file.
+dependencies = [
+    "pysnmp>=7.1,<8",
+    "pyyaml>=5.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/kdesch5000/firewalla-snmp-proxy"
+Issues = "https://github.com/kdesch5000/firewalla-snmp-proxy/issues"
+
+[project.scripts]
+firewalla-snmp-proxy = "firewalla_snmp_proxy.cli:main"
+
+[tool.setuptools]
+packages = ["firewalla_snmp_proxy", "firewalla_snmp_proxy.mibs"]
+
+[tool.setuptools.package-data]
+firewalla_snmp_proxy = ["../mibs/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

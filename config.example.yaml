@@ -1,0 +1,83 @@
+# firewalla-snmp-proxy example configuration
+#
+# Generate a real one with:
+#     export FIREWALLA_MSP_TOKEN=<your token>
+#     firewalla-snmp-proxy init --domain <your>.firewalla.net
+#
+# ...which discovers your switches and fills in the 'switches' list for you.
+
+msp:
+  # The hostname of your Firewalla MSP web console. Look at the URL you use to
+  # reach MSP in a browser: https://dn-abc123.firewalla.net/ -> use the host.
+  domain: "dn-abc123.firewalla.net"
+
+  # The API token is read from the FIREWALLA_MSP_TOKEN environment variable by
+  # default. Create one in the MSP web console under account settings.
+  #
+  # Prefer the environment variable (see install.sh, which writes a 0600
+  # EnvironmentFile) or token_file. If you do put it inline below, the proxy
+  # will warn you when the file is group- or world-readable.
+  #
+  # token_file: /etc/firewalla-snmp-proxy/token
+  # token: "..."
+
+  # Only needed if your account has more than one Firewalla box.
+  # box_gid: "00000000-0000-0000-0000-000000000000"
+
+# Seconds between MSP API polls. Minimum 15.
+#
+# There is no benefit to polling faster than the cloud API refreshes its own
+# switch statistics -- see "How fresh is the data?" in the README. 60 is a
+# sensible default and matches what most NMSes poll at.
+poll_interval: 60
+
+listen:
+  # 127.0.0.1 is the safe default: only this host can poll the proxy. Set to
+  # 0.0.0.0 if your monitoring system runs elsewhere, and firewall the ports.
+  address: "127.0.0.1"
+
+  # Each switch gets its own UDP port, starting here (16100, 16101, ...).
+  # One port per switch, rather than one port with several communities,
+  # because some monitoring systems identify a device by IP:port.
+  base_port: 16100
+
+# SNMPv1/v2c community string. Grants read-only access; SET is always refused.
+community: "public"
+
+# Base OID for the vendor subtree, which carries the four things that have no
+# standard MIB home: per-port PoE wattage, STP port role, SFP transceiver
+# detail, and ACL counts.
+#
+# 99999 is a placeholder in unassigned IANA space (assignments are currently
+# around 66649, so it will not collide). Change it only if you register your
+# own Private Enterprise Number -- and then update mibs/FIREWALLA-SNMP-PROXY-MIB.txt
+# to match.
+enterprise_oid: "1.3.6.1.4.1.99999"
+
+# Reported as sysContact.0 and sysLocation.0.
+# Override sysObjectID.0. Defaults to <enterprise_oid>.2.
+#
+# Only needed when REPLACING an existing SNMP proxy for the same switch.
+# Monitoring systems key their device and OS detection on sysObjectID, so
+# keeping the old value makes your NMS treat this as the same device and keep
+# its existing OS definition, icon and historical port graphs. Leave unset for
+# a fresh install.
+#
+# sys_object_id: "1.3.6.1.4.1.8072.3.2.10.99.2"
+
+sys_contact: ""
+sys_location: ""
+
+# Where to persist counter offsets. This is what keeps your traffic graphs
+# from showing a huge negative spike when the Firewalla resets its port
+# counters, or when this proxy restarts. Must be writable by the service user.
+state_file: "/var/lib/firewalla-snmp-proxy/counters.json"
+
+switches:
+  - mac: "20:6D:31:00:00:01"
+    port: 16100
+    # Optional: override the name reported as sysName.0 (and lldpLocSysName).
+    # Without this, sysName is the switch's hostname from the Firewalla API.
+    # name: "core-switch"
+    # Optional: a different community for this switch only
+    # community: "another-community"

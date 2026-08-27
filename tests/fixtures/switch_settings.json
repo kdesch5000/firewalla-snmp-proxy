@@ -1,0 +1,7 @@
+{
+  "flowControl": true,
+  "stp": {
+    "enable": true,
+    "protocol": "rstp"
+  }
+}

@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# Local configuration and state: these hold a real API token and live counter
+# offsets. Never commit them. Use config.example.yaml as the template.
+config.yaml
+config.local.yaml
+token
+*.local.*
+counters.json

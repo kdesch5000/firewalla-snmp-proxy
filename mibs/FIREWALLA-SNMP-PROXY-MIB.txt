@@ -1,0 +1,526 @@
+FIREWALLA-SNMP-PROXY-MIB DEFINITIONS ::= BEGIN
+
+-- ==================================================================
+-- Vendor MIB for firewalla-snmp-proxy.
+--
+-- Holds the Firewalla Switch data that has no home in any standard MIB:
+-- per-port PoE wattage (RFC 3621 models PoE status but has no per-port
+-- power object), STP port role, SFP transceiver detail, ACL usage, and a
+-- proxy health group.
+--
+-- Everything else this proxy publishes lives in standard MIBs and needs
+-- no vendor file: IF-MIB, POWER-ETHERNET-MIB, BRIDGE-MIB, ENTITY-MIB,
+-- ENTITY-SENSOR-MIB and LLDP-MIB.
+--
+-- ENTERPRISE NUMBER
+--   99999 is a PLACEHOLDER in unassigned IANA space. IANA is currently
+--   issuing Private Enterprise Numbers around 66649, so it will not
+--   collide for the foreseeable future.
+--
+--   If you register your own PEN (free, at
+--   https://www.iana.org/assignments/enterprise-numbers), change BOTH:
+--     1. 'enterprise_oid' in config.yaml
+--     2. the firewalla OBJECT IDENTIFIER below
+--   and reload this MIB into your NMS.
+--
+-- All objects are read-only. The proxy refuses SNMP SET, and its API
+-- client cannot issue anything but GETs.
+-- ==================================================================
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, enterprises, Integer32, Gauge32,
+    Counter32
+        FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION, DisplayString, TruthValue
+        FROM SNMPv2-TC
+    InterfaceIndex
+        FROM IF-MIB;
+
+firewallaSnmpProxyMIB MODULE-IDENTITY
+    LAST-UPDATED "202608270000Z"
+    ORGANIZATION "firewalla-snmp-proxy project"
+    CONTACT-INFO
+        "https://github.com/kdesch5000/firewalla-snmp-proxy"
+    DESCRIPTION
+        "Firewalla Switch data with no standard-MIB equivalent, plus proxy
+         health. Populated from the Firewalla MSP cloud API."
+    REVISION "202608270000Z"
+    DESCRIPTION "Initial revision."
+    ::= { enterprises 99999 }
+
+fwProxy             OBJECT IDENTIFIER ::= { firewallaSnmpProxyMIB 1 }
+fwSwitch            OBJECT IDENTIFIER ::= { firewallaSnmpProxyMIB 2 }
+fwPorts             OBJECT IDENTIFIER ::= { firewallaSnmpProxyMIB 3 }
+
+-- ==================================================================
+-- Textual conventions
+-- ==================================================================
+
+FwPollStatus ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "State of the proxy's connection to the Firewalla MSP API.
+
+         ok(1)     - last poll succeeded recently.
+         stale(2)  - no successful poll for more than three poll intervals.
+                     Values being served are old but were once real.
+         error(3)  - no successful poll has ever completed.
+
+         This is the object to alert on. Without it, an NMS cannot tell a
+         genuinely idle switch from a proxy that has lost API access and is
+         serving frozen counters."
+    SYNTAX      INTEGER { ok(1), stale(2), error(3) }
+
+-- ==================================================================
+-- fwProxy: proxy health
+-- ==================================================================
+
+fwProxyVersion OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Version of firewalla-snmp-proxy serving this agent."
+    ::= { fwProxy 1 }
+
+fwProxySecondsSincePoll OBJECT-TYPE
+    SYNTAX      Integer32
+    UNITS       "seconds"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Seconds since the last successful MSP API poll. 0 if none has ever
+         succeeded -- check fwProxyPollStatus to tell those apart."
+    ::= { fwProxy 2 }
+
+fwProxyPollStatus OBJECT-TYPE
+    SYNTAX      FwPollStatus
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Health of the proxy's link to the MSP API."
+    ::= { fwProxy 3 }
+
+fwProxyApiLatency OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "milliseconds"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Round-trip time of the most recent MSP API request."
+    ::= { fwProxy 4 }
+
+fwProxyLastError OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Most recent poll error, or the empty string if the last poll was
+         clean."
+    ::= { fwProxy 5 }
+
+fwProxyPollCount OBJECT-TYPE
+    SYNTAX      Counter32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Successful polls since the proxy started."
+    ::= { fwProxy 6 }
+
+-- ==================================================================
+-- fwSwitch: switch-wide scalars
+-- ==================================================================
+
+fwSwitchMac OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Switch MAC address, as the MSP API reports it."
+    ::= { fwSwitch 1 }
+
+fwSwitchName OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Switch name as configured in the Firewalla app."
+    ::= { fwSwitch 2 }
+
+fwSwitchModel OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Model code, e.g. 'fwsw-B'. Note this identifier has changed
+         repeatedly in the API; do not build alerting logic on its exact
+         value."
+    ::= { fwSwitch 3 }
+
+fwSwitchSerialNumber OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Hardware serial number. Also in ENTITY-MIB."
+    ::= { fwSwitch 4 }
+
+fwSwitchFirmwareVersion OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Switch firmware version, e.g. '1.12.0'."
+    ::= { fwSwitch 5 }
+
+fwSwitchHardwareVersion OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Hardware revision, e.g. 'v1.0.0'."
+    ::= { fwSwitch 6 }
+
+fwSwitchProtocolVersion OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Firewalla management protocol version."
+    ::= { fwSwitch 7 }
+
+fwSwitchActiveBranch OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Firmware release channel, e.g. 'stable'."
+    ::= { fwSwitch 8 }
+
+fwSwitchOnline OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Whether the MSP cloud currently considers the switch online. This
+         is the cloud's view, not a direct reachability test from the proxy
+         host."
+    ::= { fwSwitch 9 }
+
+fwSwitchHealth OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Health summary string reported by the switch, e.g. 'Healthy'."
+    ::= { fwSwitch 10 }
+
+fwSwitchFanStatus OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Fan status. 'none' on fanless models such as the Switch SE, which
+         also report no usable temperature."
+    ::= { fwSwitch 11 }
+
+fwSwitchManagementIp OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Management IP address of the switch."
+    ::= { fwSwitch 12 }
+
+fwSwitchPoePowerUsed OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "milliwatts"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Total PoE power delivered by the chassis, in milliwatts.
+         POWER-ETHERNET-MIB's pethMainPseConsumptionPower carries the same
+         figure but only in whole watts; this preserves the API's 0.1 W
+         resolution."
+    ::= { fwSwitch 13 }
+
+fwSwitchPoeBudgetUtil OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The API's 'budgetUtil' field, passed through verbatim and
+         deliberately uninterpreted. It is NOT a percentage of
+         fwSwitchPoePowerUsed: a value of 114 has been observed alongside
+         10.5 W of actual draw. Its true meaning is undocumented, so treat
+         it as opaque and do not alert on it."
+    ::= { fwSwitch 14 }
+
+fwSwitchAclCount OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Total ACL entries in use (fwSwitchAclTracking +
+         fwSwitchAclControl)."
+    ::= { fwSwitch 15 }
+
+fwSwitchAclMax OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "ACL capacity as reported by the switch. Note this does NOT bound
+         fwSwitchAclCount: counts of 1229 against a max of 256 have been
+         observed, which suggests it limits only the control ACLs. Compare
+         against fwSwitchAclControl, not fwSwitchAclCount."
+    ::= { fwSwitch 16 }
+
+fwSwitchAclTracking OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "ACL entries used for flow tracking."
+    ::= { fwSwitch 17 }
+
+fwSwitchAclControl OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "ACL entries used for access control rules."
+    ::= { fwSwitch 18 }
+
+fwSwitchFlowControl OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Whether 802.3x flow control is enabled switch-wide."
+    ::= { fwSwitch 19 }
+
+fwSwitchStpEnabled OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Whether spanning tree is enabled. When false, the proxy omits the
+         BRIDGE-MIB dot1dStp group entirely."
+    ::= { fwSwitch 20 }
+
+fwSwitchStpProtocol OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Spanning tree variant in use, e.g. 'rstp'."
+    ::= { fwSwitch 21 }
+
+fwSwitchUplinkMac OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "MAC of the device the uplink connects to. Also published as an
+         LLDP-MIB neighbour, which is what an NMS uses to draw topology."
+    ::= { fwSwitch 22 }
+
+fwSwitchUplinkPort OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Interface on the upstream device, e.g. 'eth1'."
+    ::= { fwSwitch 23 }
+
+fwSwitchUplinkLocalPort OBJECT-TYPE
+    SYNTAX      InterfaceIndex
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Local switch port carrying the uplink; matches ifIndex."
+    ::= { fwSwitch 24 }
+
+fwSwitchUplinkType OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Kind of upstream device, e.g. 'box'."
+    ::= { fwSwitch 25 }
+
+fwSwitchUplinkConnectionType OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Uplink medium, e.g. 'ethernet'."
+    ::= { fwSwitch 26 }
+
+fwSwitchActivePartition OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Which A/B firmware slot is running (1 or 2). Compare with the
+         partition version objects to spot a switch that downloaded an
+         upgrade but is still running the old image."
+    ::= { fwSwitch 27 }
+
+fwSwitchPartition1Version OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Firmware image in slot 1."
+    ::= { fwSwitch 28 }
+
+fwSwitchPartition2Version OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Firmware image in slot 2."
+    ::= { fwSwitch 29 }
+
+-- ==================================================================
+-- fwPortTable: per-port, indexed by ifIndex
+-- ==================================================================
+
+fwPortTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF FwPortEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Per-port attributes with no standard-MIB equivalent. Indexed by
+         ifIndex, so rows join directly to IF-MIB, POWER-ETHERNET-MIB and
+         BRIDGE-MIB rows for the same port."
+    ::= { fwPorts 1 }
+
+fwPortEntry OBJECT-TYPE
+    SYNTAX      FwPortEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One switch port."
+    INDEX       { fwPortIndex }
+    ::= { fwPortTable 1 }
+
+FwPortEntry ::= SEQUENCE {
+    fwPortIndex             InterfaceIndex,
+    fwPortPoePower          Gauge32,
+    fwPortPoeMode           DisplayString,
+    fwPortPoeStatus         DisplayString,
+    fwPortStpRole           DisplayString,
+    fwPortStpState          DisplayString,
+    fwPortType              DisplayString,
+    fwPortNetworkName       DisplayString,
+    fwPortNetworkUuid       DisplayString,
+    fwPortSfpPresent        TruthValue,
+    fwPortSfpConnectorType  DisplayString,
+    fwPortSfpBitRate        DisplayString,
+    fwPortSfpVendorOui      DisplayString
+}
+
+fwPortIndex OBJECT-TYPE
+    SYNTAX      InterfaceIndex
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Port number, identical to ifIndex."
+    ::= { fwPortEntry 1 }
+
+fwPortPoePower OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "milliwatts"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Power currently delivered on this port, in milliwatts. 0 when not
+         delivering.
+
+         This object exists because RFC 3621 has no per-port power draw
+         object at all -- it models detection status, type and negotiated
+         class, but not measured watts. This is the single most useful
+         Firewalla field with no standard home."
+    ::= { fwPortEntry 2 }
+
+fwPortPoeMode OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Negotiated PoE standard, e.g. '802.3af' or '802.3at'. Empty when
+         not delivering. Also in pethPsePortType."
+    ::= { fwPortEntry 3 }
+
+fwPortPoeStatus OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Raw PoE status string, e.g. 'delivering' or 'searching'. The
+         enumerated form is pethPsePortDetectionStatus; prefer that for
+         alerting and use this for display."
+    ::= { fwPortEntry 4 }
+
+fwPortStpRole OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "RSTP port role: 'root', 'designated', 'alternate', 'backup' or
+         'disabled'.
+
+         Present here because role belongs to
+         IEEE8021-SPANNING-TREE-MIB, which few NMSes implement. The port
+         *state* is available in the widely-supported BRIDGE-MIB as
+         dot1dStpPortState."
+    ::= { fwPortEntry 5 }
+
+fwPortStpState OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Raw RSTP port state string, e.g. 'forwarding' or 'discarding'.
+         Note dot1dStpPortState maps RSTP 'discarding' onto the legacy
+         'blocking(2)' value, so this object preserves the original term."
+    ::= { fwPortEntry 6 }
+
+fwPortType OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Port mode: 'trunk' or 'access'."
+    ::= { fwPortEntry 7 }
+
+fwPortNetworkName OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Friendly name of the Firewalla network/VLAN assigned to an access
+         port, e.g. 'IoTVLan'. Empty on trunk ports.
+
+         Note the API supplies a network UUID, not an 802.1Q VLAN ID, so
+         Q-BRIDGE-MIB is deliberately not populated -- doing so would mean
+         inventing VLAN tag numbers."
+    ::= { fwPortEntry 8 }
+
+fwPortNetworkUuid OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Firewalla network UUID for an access port. Joins to the 'network.id'
+         field on Firewalla device records."
+    ::= { fwPortEntry 9 }
+
+fwPortSfpPresent OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Whether a transceiver is inserted. Instantiated only for ports that
+         have an SFP cage."
+    ::= { fwPortEntry 10 }
+
+fwPortSfpConnectorType OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Transceiver connector type, e.g. 'LC  [ 0x07 ]'."
+    ::= { fwPortEntry 11 }
+
+fwPortSfpBitRate OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Nominal transceiver bit rate, e.g. '1.3 Gbps'."
+    ::= { fwPortEntry 12 }
+
+fwPortSfpVendorOui OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Transceiver vendor OUI as reported by the switch."
+    ::= { fwPortEntry 13 }
+
+END
