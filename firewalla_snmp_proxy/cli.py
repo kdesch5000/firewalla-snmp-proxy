@@ -17,7 +17,7 @@ import os
 import signal
 import sys
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import __version__
 from .agent import SwitchAgent
@@ -31,6 +31,8 @@ from .config import (
 )
 from .counters import CounterStore
 from .ramp import CounterRamp
+from .reachability import ReachabilityMonitor
+from .snapshot import TopologySnapshot
 from .mibs import SwitchContext
 from .model import Switch
 from .msp_api import MspClient, MspError, MspRateLimited
@@ -85,16 +87,16 @@ def _resolve_gid(client: MspClient, cfg: Config) -> str:
     return str(boxes[0]["gid"])
 
 
-def _build_contexts(cfg: Config, client: MspClient, gid: str) -> Dict[str, SwitchAgent]:
-    """Fetch each configured switch once and build its agent (unbound)."""
-    counters = CounterStore(cfg.state_file)
-    # One ramp shared by every agent: its state is keyed by switch MAC, and a
-    # per-agent instance would reset whenever the tree was rebuilt.
-    ramp = (
-        CounterRamp(cfg.ramp_window)
-        if cfg.counter_smoothing == "ramp"
-        else None
-    )
+def _fetch_payload(
+    cfg: Config, client: MspClient, gid: str
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch the API data every configured switch needs, once.
+
+    Returned shape matches what :mod:`.snapshot` persists, so a live fetch and
+    a cache load are interchangeable inputs to :func:`_build_agents`. That
+    equivalence is the whole point: it is what lets startup proceed with no API
+    at all.
+    """
     networks = client.network_names(gid)
     settings = client.switch_settings(gid)
     nodes = {
@@ -102,7 +104,7 @@ def _build_contexts(cfg: Config, client: MspClient, gid: str) -> Dict[str, Switc
         for n in client.find_switches(gid)
     }
 
-    agents: Dict[str, SwitchAgent] = {}
+    payload: Dict[str, Dict[str, Any]] = {}
     for sc in cfg.switches:
         mac = sc.normalized_mac
         node = nodes.get(mac)
@@ -114,16 +116,59 @@ def _build_contexts(cfg: Config, client: MspClient, gid: str) -> Dict[str, Switc
         merged = dict(node)
         try:
             merged.update(client.switch_detail(gid, mac) or {})
+        except MspRateLimited:
+            raise
         except MspError as exc:
             log.warning("could not fetch detail for %s: %s", mac, exc)
+        payload[mac] = {
+            "raw": merged, "settings": settings, "networks": networks,
+        }
+    return payload
 
-        import time as _time
 
+def _build_agents(
+    cfg: Config,
+    payload: Dict[str, Dict[str, Any]],
+    reach: Optional[ReachabilityMonitor] = None,
+    live: bool = True,
+    polled_at: Optional[float] = None,
+    api_latency_ms: int = 0,
+) -> Dict[str, SwitchAgent]:
+    """Build one unbound agent per configured switch from ``payload``.
+
+    ``live=False`` marks the agents as serving cache: ``last_poll_ok`` is set
+    to when the cache was *written*, not now, so ``fwProxySecondsSincePoll``
+    and ``fwProxyPollStatus`` report the real age of the data rather than
+    claiming a fresh poll that never happened.
+    """
+    counters = CounterStore(cfg.state_file)
+    # One ramp shared by every agent: its state is keyed by switch MAC, and a
+    # per-agent instance would reset whenever the tree was rebuilt.
+    ramp = (
+        CounterRamp(cfg.ramp_window)
+        if cfg.counter_smoothing == "ramp"
+        else None
+    )
+    stamp = time.time() if polled_at is None else float(polled_at)
+
+    agents: Dict[str, SwitchAgent] = {}
+    for sc in cfg.switches:
+        mac = sc.normalized_mac
+        entry = payload.get(mac)
+        if entry is None:
+            raise ConfigError(
+                "switch %s is configured but absent from the %s data. "
+                "Available: %s"
+                % (mac, "API" if live else "topology cache",
+                   ", ".join(sorted(payload)) or "none")
+            )
         switch = Switch(
-            raw=merged,
-            settings=settings,
-            networks=networks,
-            polled_at=_time.time(),
+            raw=entry.get("raw") or {},
+            settings=entry.get("settings") or {},
+            networks=entry.get("networks") or {},
+            # Frozen at the cache's own timestamp when serving cache: deriving
+            # sysUpTime from 'now' would advertise uptime we cannot observe.
+            polled_at=stamp,
             name_override=sc.name,
         )
         ctx = SwitchContext(
@@ -136,14 +181,33 @@ def _build_contexts(cfg: Config, client: MspClient, gid: str) -> Dict[str, Switc
             proxy_version=__version__,
             stale_after=max(300.0, cfg.poll_interval * 3.0),
             ramp=ramp,
+            reach=reach,
         )
-        ctx.poll_count = 1
-        ctx.last_poll_ok = _time.time()
-        ctx.api_latency_ms = int((client.last_latency or 0.0) * 1000)
+        ctx.poll_count = 1 if live else 0
+        ctx.last_poll_ok = stamp
+        ctx.api_latency_ms = api_latency_ms
+        ctx.serving_cache = not live
+        if not live:
+            ctx.last_error = (
+                "MSP API unavailable at startup; serving cached topology from "
+                "%s. Counters are frozen, so derived rates read zero -- see "
+                "fwProxyIcmpStatus for whether the switch is actually up."
+                % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stamp))
+            )
         agents[mac] = SwitchAgent(
             ctx, cfg.listen_address, sc.port, cfg.community_for(sc)
         )
     return agents
+
+
+def _build_contexts(
+    cfg: Config, client: MspClient, gid: str
+) -> Dict[str, SwitchAgent]:
+    """Fetch each configured switch once and build its agent (unbound)."""
+    return _build_agents(
+        cfg, _fetch_payload(cfg, client, gid),
+        api_latency_ms=int((client.last_latency or 0.0) * 1000),
+    )
 
 
 # -- init ----------------------------------------------------------------
@@ -261,6 +325,19 @@ max_ramp_seconds: 0
 # Ceiling on exponential backoff after an HTTP 429, in seconds. A Retry-After
 # header from the API always takes precedence over the computed delay.
 max_backoff_seconds: 3600
+
+# Cache of the last successful API response. If the API is unavailable at
+# startup, agents are rebuilt from this so the NMS keeps seeing the device and
+# its full port set instead of the device going down. Counters are frozen, so
+# rates read zero -- fwProxyServingCache reports when this is in effect.
+topology_cache: "/var/lib/firewalla-snmp-proxy/topology.json"
+
+# Host to ping for live switch reachability, independent of the API -- the only
+# live signal during a rate-limit lockout. Prefer a hostname over a literal IP.
+# Empty disables it. Needs no elevated privileges.
+ping_host: ""
+ping_interval: 60
+ping_fail_threshold: 3
 
 listen:
   # 127.0.0.1 is the safe default. Change to 0.0.0.0 to let an NMS on another
@@ -427,38 +504,155 @@ def _fmt(value) -> str:
 
 
 # -- run -----------------------------------------------------------------
-async def _startup(cfg: Config, client: MspClient):
-    """Resolve the box and build agents, waiting out any rate limit.
+async def _startup(
+    cfg: Config,
+    client: MspClient,
+    snapshot: Optional[TopologySnapshot] = None,
+    reach: Optional[ReachabilityMonitor] = None,
+):
+    """Build agents, preferring live API data and falling back to the cache.
 
-    Startup necessarily hits the API before the poller exists, so it needs its
-    own backoff. Exiting on a 429 instead would be actively harmful: systemd's
-    ``Restart=on-failure`` with a 15s ``RestartSec`` would crash-loop against
-    the rate-limited API, spending several calls every 15 seconds and keeping
-    the quota pinned indefinitely. Retrying in-process, slowly, cannot.
+    Startup must not depend on the API being reachable. The SNMP sockets are
+    bound from the agents built here, so failing at this point means the NMS
+    sees the device as **down** -- which is strictly less informative than a
+    device that is up, reporting stale counters, and saying so via
+    ``fwProxyServingCache`` and ``fwProxyIcmpStatus``.
+
+    Order of preference:
+
+    1. **Live API.** Normal path; also refreshes the on-disk cache.
+    2. **Cached payload.** Same port layout, frozen counters. The poller keeps
+       retrying in the background and upgrades to live data on recovery.
+    3. **Retry with backoff.** Only when there is no usable cache -- on a
+       first-ever run the port layout is genuinely unknown, and serving a
+       truncated ifTable would make Observium delete the ports it has not
+       heard about.
+
+    Exiting is never an option for an API problem: systemd's
+    ``Restart=on-failure`` would just restart us into the same rate limit.
     """
     strikes = 0
     while True:
         try:
             gid = _resolve_gid(client, cfg)
-            return gid, _build_contexts(cfg, client, gid)
-        except MspRateLimited as exc:
+            payload = _fetch_payload(cfg, client, gid)
+        except (MspRateLimited, MspError) as exc:
+            cached = snapshot.load() if snapshot is not None else None
+            if cached:
+                age = snapshot.age_seconds() or 0.0
+                log.warning(
+                    "MSP API unavailable at startup (%s) -- serving CACHED "
+                    "topology written %s ago. Full port set is published so "
+                    "the NMS keeps the device and its graphs; counters are "
+                    "frozen, so rates read zero until the API recovers. "
+                    "Reachability now comes from ICMP to %r.",
+                    exc, _human_age(age), cfg.ping_host or "(disabled)",
+                )
+                return cached.get("gid") or (cfg.box_gid or ""), _build_agents(
+                    cfg, cached["switches"], reach=reach, live=False,
+                    polled_at=cached.get("saved_at"),
+                )
+            if not isinstance(exc, MspRateLimited):
+                # No cache and not a rate limit: a bad token or a switch that
+                # is genuinely absent should fail loudly, not spin forever.
+                raise
             strikes += 1
-            delay = rate_limit_delay(
-                exc, cfg.poll_interval, strikes, float(cfg.max_backoff_seconds)
+            # Dark: no cache, so nothing is being served and the NMS sees the
+            # device as down. Probe more often than a polite Retry-After would
+            # allow -- that header can be a fixed hint rather than a real
+            # quota-reset time, and honouring 3600 literally can mean sitting
+            # dark for an hour after the quota already cleared. Once a cache
+            # exists this branch is unreachable and backoff is fully polite.
+            delay = min(
+                rate_limit_delay(
+                    exc, cfg.poll_interval, strikes,
+                    float(cfg.max_backoff_seconds),
+                ),
+                float(cfg.dark_probe_max_seconds),
             )
             log.warning(
-                "MSP API rate limited during startup (attempt %d): %s -- "
-                "retrying in %ds (~%s). Staying up rather than exiting, so "
-                "systemd cannot restart us straight back into the rate limit.",
+                "MSP API rate limited during startup (attempt %d): %s -- and "
+                "no topology cache to fall back on, so the port layout is "
+                "unknown and nothing can be served yet. Probing again in %ds "
+                "(~%s); capped at %ds while dark.",
                 strikes, exc, int(delay),
                 time.strftime("%H:%M:%S", time.localtime(time.time() + delay)),
+                cfg.dark_probe_max_seconds,
             )
             await asyncio.sleep(delay)
+            continue
+
+        agents = _build_agents(
+            cfg, payload, reach=reach, live=True,
+            api_latency_ms=int((client.last_latency or 0.0) * 1000),
+        )
+        if snapshot is not None:
+            snapshot.save(gid, payload)
+        return gid, agents
+
+
+def _human_age(seconds: float) -> str:
+    if seconds < 90:
+        return "%ds" % int(seconds)
+    if seconds < 5400:
+        return "%dm" % int(seconds / 60)
+    return "%.1fh" % (seconds / 3600.0)
+
+
+async def _ping_loop(reach: ReachabilityMonitor, interval: int, stop: asyncio.Event):
+    """Keep ICMP reachability fresh, independently of the poll interval.
+
+    Runs far more often than the poller because it costs no API quota, and
+    because during a lockout it is the *only* live signal about the switch.
+    Blocking socket work is pushed to a thread so SNMP replies never wait on it.
+    """
+    loop = asyncio.get_running_loop()
+    previous = reach.state
+    while not stop.is_set():
+        try:
+            await loop.run_in_executor(None, reach.check)
+            if reach.state is not previous:
+                log.info(
+                    "ICMP reachability of %s: %s -> %s",
+                    reach.host, _reach_word(previous), _reach_word(reach.state),
+                )
+                previous = reach.state
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("reachability check failed: %s", exc)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
+def _reach_word(state) -> str:
+    return {True: "up", False: "down"}.get(state, "unknown")
 
 
 async def _serve(cfg: Config) -> int:
     client = _client(cfg)
-    gid, agents = await _startup(cfg, client)
+    snapshot = TopologySnapshot(cfg.topology_cache or None)
+    reach = (
+        ReachabilityMonitor(
+            cfg.ping_host,
+            timeout=cfg.ping_timeout,
+            fail_threshold=cfg.ping_fail_threshold,
+            recover_threshold=cfg.ping_recover_threshold,
+        )
+        if cfg.ping_host
+        else None
+    )
+    if reach is not None:
+        # Seed once before binding, so the very first SNMP request already has
+        # a reachability answer rather than reporting unknown(3) for a minute.
+        await asyncio.get_running_loop().run_in_executor(None, reach.check)
+        log.info(
+            "ICMP reachability of %s: %s (%s)",
+            reach.host, _reach_word(reach.state),
+            "%.2f ms" % reach.rtt_ms if reach.rtt_ms is not None else "no rtt",
+        )
+
+    gid, agents = await _startup(cfg, client, snapshot=snapshot, reach=reach)
 
     counters = CounterStore(cfg.state_file)
     for agent in agents.values():
@@ -468,6 +662,7 @@ async def _serve(cfg: Config) -> int:
     poller = Poller(
         client, gid, agents, counters, cfg.poll_interval,
         max_backoff=float(cfg.max_backoff_seconds),
+        snapshot=snapshot,
     )
 
     loop = asyncio.get_running_loop()
@@ -485,14 +680,23 @@ async def _serve(cfg: Config) -> int:
             pass
 
     poll_task = asyncio.create_task(poller.run())
+    ping_task = (
+        asyncio.create_task(_ping_loop(reach, cfg.ping_interval, stopping))
+        if reach is not None
+        else None
+    )
     log.info(
         "serving %d switch(es); poll interval %ds; smoothing %s; "
-        "rate-limit backoff capped at %ds",
+        "rate-limit backoff capped at %ds; ping %s",
         len(agents), cfg.poll_interval, cfg.counter_smoothing,
         cfg.max_backoff_seconds,
+        "%s every %ds" % (cfg.ping_host, cfg.ping_interval)
+        if reach is not None else "disabled",
     )
     await stopping.wait()
     poll_task.cancel()
+    if ping_task is not None:
+        ping_task.cancel()
     for agent in agents.values():
         agent.stop()
     counters.save(force=True)

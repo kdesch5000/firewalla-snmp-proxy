@@ -391,6 +391,71 @@ While backed off, `fwProxyLastError` says so explicitly and
 `fwProxySecondsSincePoll` keeps climbing — **alert on those**, not on traffic
 rates, which cannot distinguish a rate limit from a quiet switch.
 
+### Surviving an API outage without going down
+
+Backing off politely is not enough on its own, because the SNMP sockets are
+built from the port layout — and that used to come only from a live `/topology`
+call. So a proxy restarted mid-lockout stayed up but never *listened*, and the
+NMS saw the device as **down** for the whole lockout.
+
+Two things prevent that:
+
+**A topology cache.** Every successful poll writes the merged API payload to
+`topology_cache`. If the API is unavailable at startup, agents are rebuilt from
+that file and serve immediately, publishing the **full** port set. Counters are
+frozen at their cached values, so derived rates read zero — which is honest, and
+`fwProxyServingCache` is what tells you the difference between that and an idle
+switch. The poller keeps retrying in the background and upgrades to live data
+the moment the API recovers.
+
+Serving a *truncated* ifTable during a lockout was considered and rejected:
+Observium marks ports absent from ifTable as deleted, which would discard the
+very port history the cache exists to protect. Either every port is served or
+none is — which is why a first-ever run with no cache still has to wait.
+
+**An ICMP reachability check.** `ping_host` pings the real switch on its own
+cadence (`ping_interval`, default 60s), independently of the poll loop. This is
+what makes serving cached data *safe*: the counters are admittedly old, but
+`fwSwitchOnline` and `fwProxyIcmpStatus` still reflect reality, so a
+stale-but-alive switch stays distinguishable from one that has actually gone
+away. It costs no API quota, so it keeps working through a lockout — during
+which it is the only live signal you have.
+
+Reachability is **tri-state**, and the third state matters. A check that could
+not be *carried out* — unresolvable name, no ICMP permission — is `unknown`, not
+`down`; folding the two together would report a fake outage every time the host
+rebooted before its resolver was ready. Transitions are debounced, and
+asymmetrically: `ping_fail_threshold` defaults to 3 while
+`ping_recover_threshold` defaults to 1, because coming back is unambiguous and
+going away is not.
+
+No privileges are needed. An unprivileged ICMP datagram socket is used where
+`net.ipv4.ping_group_range` permits, falling back to the `ping` binary
+otherwise; both paths work under this project's hardened systemd unit.
+
+Prefer a **hostname** over a literal IP for `ping_host` — if the switch's
+address changes via DHCP, a hardcoded IP silently starts reporting a dead
+switch.
+
+What each state looks like to an NMS:
+
+| Situation | `fwProxyPollStatus` | `fwProxyServingCache` | `fwProxyIcmpStatus` | Rates |
+|---|---|---|---|---|
+| Normal | `ok(1)` | `false(2)` | `up(1)` | real |
+| API rate limited, switch alive | `stale(2)` | `true(1)` if restarted | `up(1)` | zero |
+| API rate limited, switch gone | `error(3)` | `true(1)` if restarted | `down(2)` | zero |
+| Ping target unresolvable | unchanged | — | `unknown(3)` | — |
+| No `ping_host` set | age-based | — | `disabled(4)` | — |
+
+Two things are deliberately *not* faked. Per-port `ifOperStatus` keeps its
+last-known value while serving cache, because ICMP to the switch says nothing
+about individual port link state — reporting `down(2)` would invent an outage
+and `unknown(4)` would churn port-state history. And recovery from a long
+lockout lands the accumulated delta in one overstated sample, because the ramp
+is skipped past `max_ramp_seconds`; spreading an hour of old traffic across the
+following hour would mask what the switch is doing *now*, and RRA consolidation
+fixes the long-run average either way.
+
 ### Counter smoothing: a slow poll for a fast NMS
 
 A 15-minute interval creates a cadence mismatch, because most NMSes poll faster
@@ -443,6 +508,9 @@ msp:
 poll_interval: 900         # 15 min; see "Rate limits" above
 counter_smoothing: ramp    # or "raw"; see "Counter smoothing" above
 max_backoff_seconds: 3600  # ceiling on 429 backoff
+topology_cache: "/var/lib/firewalla-snmp-proxy/topology.json"
+ping_host: "switch.example.com"   # live reachability; prefer a hostname
+ping_interval: 60
 listen:
   address: "127.0.0.1"     # 0.0.0.0 to allow a remote NMS
   base_port: 16100         # one port per switch

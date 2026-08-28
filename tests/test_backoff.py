@@ -285,9 +285,14 @@ def test_startup_waits_out_a_rate_limit_instead_of_exiting(monkeypatch):
         return "gid-1"
 
     monkeypatch.setattr(cli, "_resolve_gid", flaky_gid)
-    monkeypatch.setattr(cli, "_build_contexts", lambda c, cl, g: {"AA": object()})
+    monkeypatch.setattr(cli, "_fetch_payload", lambda c, cl, g: {"AA": {}})
+    monkeypatch.setattr(
+        cli, "_build_agents",
+        lambda c, p, **kw: {"AA": object()},
+    )
 
-    gid, agents = asyncio.run(cli._startup(cfg, object()))
+    # No snapshot passed: with no cache to fall back on, startup must retry.
+    gid, agents = asyncio.run(cli._startup(cfg, FakeClient()))
     assert gid == "gid-1"
     assert attempts["n"] == 3  # retried rather than raising
     assert agents
@@ -305,4 +310,4 @@ def test_startup_propagates_non_rate_limit_errors(monkeypatch):
 
     monkeypatch.setattr(cli, "_resolve_gid", broken)
     with pytest.raises(MspError):
-        asyncio.run(cli._startup(cfg, object()))
+        asyncio.run(cli._startup(cfg, FakeClient()))

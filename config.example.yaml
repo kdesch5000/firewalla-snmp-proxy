@@ -66,6 +66,45 @@ max_ramp_seconds: 0
 # through a 429 keeps the quota pinned and can extend the lockout.
 max_backoff_seconds: 3600
 
+# --- Staying useful when the MSP API is unavailable --------------------------
+#
+# Cache of the last successful API response. On startup, if the API cannot be
+# reached (rate limited, network trouble), agents are rebuilt from this file so
+# the NMS keeps seeing the device AND its full port set, instead of the device
+# going down. Counters are frozen at their cached values, so derived rates read
+# zero -- fwProxyServingCache and fwProxyIcmpStatus are what say so out loud.
+#
+# Set to "" to disable, in which case startup blocks until the API answers.
+topology_cache: "/var/lib/firewalla-snmp-proxy/topology.json"
+
+# Host to ping for live switch reachability, independent of the API.
+#
+# This is the only live signal available during a rate-limit lockout, so it is
+# what makes serving cached data safe: the counters are admittedly old, but
+# fwSwitchOnline and fwProxyIcmpStatus still reflect reality.
+#
+# Prefer a HOSTNAME over a literal IP -- if the switch's address changes via
+# DHCP, a hardcoded IP silently starts reporting a dead switch. Leave empty to
+# disable, and fwProxyIcmpStatus reports disabled(4).
+#
+# Needs no elevated privileges: an unprivileged ICMP datagram socket is used
+# where net.ipv4.ping_group_range allows it, falling back to the ping binary.
+ping_host: ""
+
+# How often to ping, in seconds. Much more frequent than poll_interval is fine
+# and intended -- ICMP costs no API quota, and during a lockout it is the only
+# thing still telling you the truth.
+ping_interval: 60
+ping_timeout: 2.0
+
+# Consecutive checks needed to confirm a transition. Asymmetric on purpose:
+# coming back is unambiguous, going away is not, so a single dropped packet
+# must not report the switch away. A check that cannot be CARRIED OUT at all
+# (unresolvable name, no ICMP permission) counts as neither -- it moves no
+# counters, because it is evidence of nothing.
+ping_fail_threshold: 3
+ping_recover_threshold: 1
+
 listen:
   # 127.0.0.1 is the safe default: only this host can poll the proxy. Set to
   # 0.0.0.0 if your monitoring system runs elsewhere, and firewall the ports.

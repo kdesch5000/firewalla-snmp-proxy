@@ -2,6 +2,105 @@
 
 All notable changes to this project are documented here.
 
+## [2.2.0] - 2026-08-28
+
+The API being unavailable no longer takes the device down.
+
+**Why:** 2.1.0 stopped the proxy crash-looping through a rate limit, but it
+still could not *bind* during one — the SNMP sockets are built from the port
+layout, which only a live `/topology` call supplied. So a restart mid-lockout
+left the proxy up but silent, and Observium (whose device hostname for this
+proxy resolves to loopback, making SNMP response the sole up/down signal) marked
+the device **down** for the length of the lockout.
+
+### Added
+
+- **Topology cache** — new `firewalla_snmp_proxy.snapshot` module. Every
+  successful poll persists the merged per-switch API payload to
+  `topology_cache` (default `/var/lib/firewalla-snmp-proxy/topology.json`,
+  atomic, 0600). When the API is unavailable at startup, agents are rebuilt
+  from it and begin serving immediately, publishing the **full** port set.
+
+  Serving a truncated `ifTable` instead was rejected: Observium marks ports
+  absent from `ifTable` as deleted, which would discard the port history the
+  cache exists to protect. Either every port is served or none is — hence the
+  remaining retry path when no cache exists yet (a first-ever run genuinely
+  does not know the layout).
+
+  Cached agents report honestly: `last_poll_ok` is the cache's own write time,
+  not now, so `fwProxySecondsSincePoll` and `fwProxyPollStatus` show the real
+  age. `poll_count` is 0 and `sysUpTime` is frozen at the cached value rather
+  than advertising uptime nobody observed.
+
+- **ICMP reachability** — new `firewalla_snmp_proxy.reachability` module and a
+  `ping_host` option. Pings the real switch on its own cadence
+  (`ping_interval`, default 60s), entirely independently of the poll loop,
+  because it costs no API quota and during a lockout it is the *only* live
+  signal about the switch.
+
+  Reachability is **tri-state**. A check that could not be *carried out* —
+  unresolvable name, no ICMP permission — is `unknown`, deliberately not
+  folded into `down`: doing so would report a fake outage every time the host
+  rebooted before its resolver was ready. Unknown moves no debounce counters.
+  Transitions are debounced (`ping_fail_threshold` 3, `ping_recover_threshold`
+  1 — asymmetric because coming back is unambiguous and going away is not).
+
+  Needs no elevated privileges: an unprivileged ICMP datagram socket
+  (`SOCK_DGRAM`/`IPPROTO_ICMP`) where `net.ipv4.ping_group_range` permits it,
+  falling back to the `ping` binary. Both paths verified working inside this
+  project's systemd sandbox (`NoNewPrivileges`, `PrivateDevices`,
+  `CapabilityBoundingSet=`, `RestrictAddressFamilies=AF_INET AF_INET6`).
+
+- **Three new vendor OIDs**, with MIB definitions:
+  - `fwProxyIcmpStatus` (`.1.7`) — `up(1)`/`down(2)`/`unknown(3)`/`disabled(4)`
+  - `fwProxyIcmpRtt` (`.1.8`) — microseconds, so sub-millisecond LAN
+    round-trips are not truncated to zero
+  - `fwProxyServingCache` (`.1.9`) — true(1) while serving cached data.
+    Without this, frozen counters are indistinguishable from an idle switch.
+
+- **`dark_probe_max_seconds`** (default 300) — backoff cap while there is no
+  cache to serve, i.e. while the proxy is not listening at all and the NMS sees
+  the device as down. The API's `Retry-After` can be a fixed hint rather than a
+  real quota-reset time, so honouring `3600` literally in that state can mean
+  sitting dark for an hour after the quota already cleared. Once a cache exists
+  this branch is unreachable and backoff is fully polite again.
+- 39 new tests (205 total) covering debounce semantics, the unknown-is-not-down
+  rule, native/CLI ping dispatch, cache round-trip and corruption handling,
+  full-port-set publication from cache, and the status/online precedence rules.
+
+### Changed
+
+- **`fwSwitchOnline` now prefers ICMP over the API's `online` field.** That
+  field is only as fresh as the last successful poll, so during a lockout it can
+  assert a switch is up hours after it stopped being so. ICMP wins when it has a
+  confirmed verdict; the API value stands when ICMP is disabled or not yet
+  debounced. MIB description updated accordingly.
+- **`fwProxyPollStatus` is now reachability-aware**: stale data plus a
+  pingable switch is `stale(2)` (degraded), while stale data plus no ICMP reply
+  is `error(3)` (the switch may be gone). Collapsing both to one value wasted
+  the only live signal available.
+- `_build_contexts` split into `_fetch_payload` (API) and `_build_agents`
+  (construction), so a live fetch and a cache load are interchangeable inputs.
+  That equivalence is what makes API-free startup possible.
+- Startup now falls back to cache for *any* `MspError`, not just rate limits —
+  a connection failure deserves the same treatment. Genuine configuration
+  errors (bad token, switch absent) still fail immediately when there is no
+  cache to serve.
+
+### Deliberately unchanged
+
+- **Per-port `ifOperStatus` is left at its last-known value while serving
+  cache.** ICMP to the switch says nothing about individual port link state, so
+  both alternatives are worse: reporting `down(2)` invents an outage, and
+  `unknown(4)` would churn port-state history in the NMS. The switch-level
+  signals (`fwSwitchOnline`, `fwProxyIcmpStatus`, `fwProxyServingCache`) carry
+  the truth instead.
+- **Recovery from a long lockout produces one overstated sample.** When the gap
+  exceeds `max_ramp_seconds` the ramp is skipped, so the accumulated delta lands
+  in a single poll. The cap is deliberate — ramping an hour of old traffic over
+  the following hour would mask what the switch is doing *now* — and RRA
+  consolidation restores the correct long-run average either way.
+
 ## [2.1.0] - 2026-08-28
 
 Survives the MSP API's request quota, and stops a slow poll interval from

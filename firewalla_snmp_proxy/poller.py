@@ -30,6 +30,7 @@ from .agent import SwitchAgent
 from .counters import CounterStore
 from .model import Switch
 from .msp_api import MspClient, MspError, MspRateLimited
+from .snapshot import TopologySnapshot
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class Poller:
         counters: CounterStore,
         interval: int = 60,
         max_backoff: float = DEFAULT_MAX_BACKOFF,
+        snapshot: Optional[TopologySnapshot] = None,
     ) -> None:
         self.client = client
         self.gid = gid
@@ -89,6 +91,9 @@ class Poller:
         self.counters = counters
         self.interval = interval
         self.max_backoff = float(max_backoff)
+        #: Written on every successful cycle so a later startup can serve the
+        #: full port set without the API. See :mod:`.snapshot`.
+        self.snapshot = snapshot
         self._networks: Dict[str, str] = {}
         self._networks_at: float = 0.0
         self._stop = asyncio.Event()
@@ -130,6 +135,7 @@ class Poller:
         }
 
         updated = 0
+        fresh: Dict[str, Dict[str, object]] = {}
         for mac, agent in self.agents.items():
             node = by_mac.get(mac)
             if node is None:
@@ -162,8 +168,16 @@ class Poller:
                 # silently discarded by the first poll cycle.
                 name_override=agent.ctx.name_override,
             )
+            fresh[mac] = {
+                "raw": merged,
+                "settings": settings,
+                "networks": self._networks,
+            }
             agent.ctx.poll_count += 1
             agent.ctx.last_poll_ok = time.time()
+            # Live data has arrived, so anything served from cache is now
+            # superseded; the NMS should stop being told it is reading cache.
+            agent.ctx.serving_cache = False
             agent.ctx.api_latency_ms = int((self.client.last_latency or 0.0) * 1000)
             if not agent.ctx.last_error.startswith("detail:"):
                 agent.ctx.last_error = ""
@@ -171,6 +185,10 @@ class Poller:
             updated += 1
 
         self.counters.save()
+        if self.snapshot is not None and fresh:
+            # Only ever written from a cycle that actually succeeded, so the
+            # cache can never be poisoned with a partial or failed response.
+            self.snapshot.save(self.gid, fresh)
         return updated > 0
 
     def _mark_all_failed(self, message: str) -> None:

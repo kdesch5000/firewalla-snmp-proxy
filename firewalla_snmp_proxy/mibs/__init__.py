@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 from ..counters import CounterStore, as_counter32, as_counter64
 from ..model import Switch
 from ..ramp import CounterRamp
+from ..reachability import DOWN, UP, ReachabilityMonitor
 
 # Poll status enum published as fwProxyPollStatus.
 POLL_OK, POLL_STALE, POLL_ERROR = 1, 2, 3
@@ -42,6 +43,7 @@ class SwitchContext:
         proxy_version: str = "0.0.0",
         stale_after: float = 300.0,
         ramp: Optional[CounterRamp] = None,
+        reach: Optional[ReachabilityMonitor] = None,
     ) -> None:
         self.switch = switch
         self.counters = counters
@@ -50,6 +52,13 @@ class SwitchContext:
         #: cadence. None serves raw monotonic values. See
         #: :mod:`~firewalla_snmp_proxy.ramp`.
         self.ramp = ramp
+        #: Live ICMP evidence about the switch, independent of the MSP API.
+        #: This is what makes serving cached data safe: the counters may be
+        #: stale, but reachability is not.
+        self.reach = reach
+        #: True while serving a cached payload because the API was unavailable
+        #: at startup. Cleared by the first successful poll.
+        self.serving_cache = False
         self.enterprise = tuple(int(x) for x in str(enterprise_oid).split("."))
         # sysObjectID.0 defaults into our own subtree, but can be pinned to a
         # legacy value so an NMS keeps recognising a replaced proxy as the same
@@ -125,8 +134,34 @@ class SwitchContext:
                 return p
         return None
 
+    # -- reachability ----------------------------------------------------
+    def switch_online(self) -> bool:
+        """Best available answer to "is the switch up?".
+
+        Live ICMP outranks the API's ``online`` field, because that field is
+        only as fresh as the last successful poll -- during a rate-limit
+        lockout it can assert a switch is up hours after it stopped being so,
+        or vice versa. When ICMP has no confirmed verdict (disabled, or not yet
+        debounced) the API value is all there is, so it stands.
+        """
+        if self.reach is not None and self.reach.enabled:
+            if self.reach.state is UP:
+                return True
+            if self.reach.state is DOWN:
+                return False
+        return bool(self.switch.online)
+
     # -- poll health -----------------------------------------------------
     def poll_status(self) -> int:
+        """ok(1) / stale(2) / error(3), informed by ICMP.
+
+        The distinction that matters during an API outage: stale data from a
+        switch ICMP confirms is alive is a *degraded* state, whereas stale data
+        plus no ICMP reply means the switch itself may be gone. Collapsing both
+        to one value would waste the only live signal available.
+        """
+        if self.reach is not None and self.reach.state is DOWN:
+            return POLL_ERROR
         if self.last_poll_ok is None:
             return POLL_ERROR
         if time.time() - self.last_poll_ok > self.stale_after:

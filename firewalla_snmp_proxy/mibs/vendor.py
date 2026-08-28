@@ -15,6 +15,13 @@ polling and is serving stale numbers". ``fwProxyPollStatus`` and
 ``fwProxySecondsSincePoll`` make that visible, and are the right things to
 alert on.
 
+``fwProxyIcmpStatus``, ``fwProxyIcmpRtt`` and ``fwProxyServingCache`` extend
+that idea to the case where the MSP API is unavailable entirely. The proxy then
+serves its cached payload so the NMS keeps seeing the device and its full port
+set, and these three objects are what say so out loud -- ICMP supplies live
+proof the switch is (or is not) alive, at no API cost, while the counters are
+frozen and therefore reading as zero traffic.
+
 The base OID is configurable (``enterprise_oid`` in config.yaml) and defaults
 to a placeholder in unassigned space -- see the README. Everything is read-only.
 """
@@ -54,6 +61,30 @@ def build(tree, ctx: SwitchContext) -> None:
     tree.set(base + PROXY + (4, 0), lambda: rfc1902.Gauge32(max(0, ctx.api_latency_ms)))
     tree.set(base + PROXY + (5, 0), lambda: _oct(ctx.last_error))
     tree.set(base + PROXY + (6, 0), lambda: rfc1902.Counter32(ctx.poll_count))
+    # fwProxyIcmpStatus / fwProxyIcmpRtt: live evidence about the switch that
+    # costs no API quota, and therefore stays valid through a rate-limit
+    # lockout when every API-derived value has gone stale.
+    tree.set(
+        base + PROXY + (7, 0),
+        lambda: rfc1902.Integer(
+            ctx.reach.snmp_status() if ctx.reach is not None else 4
+        ),
+    )
+    # Microseconds, so sub-millisecond LAN round-trips survive the integer.
+    tree.set(
+        base + PROXY + (8, 0),
+        lambda: rfc1902.Gauge32(
+            int(round((ctx.reach.rtt_ms or 0.0) * 1000))
+            if ctx.reach is not None else 0
+        ),
+    )
+    # fwProxyServingCache: 1 while the port layout and counters come from the
+    # on-disk cache rather than a live poll. Without this, cached counters are
+    # indistinguishable from an idle switch.
+    tree.set(
+        base + PROXY + (9, 0),
+        lambda: rfc1902.Integer(1 if ctx.serving_cache else 2),
+    )
 
     # -- fwSwitch: switch-wide scalars ----------------------------------
     S = base + SWITCH
@@ -67,7 +98,8 @@ def build(tree, ctx: SwitchContext) -> None:
     tree.set(S + (6, 0), lambda: _oct(sw().hardware_rev))
     tree.set(S + (7, 0), lambda: _oct(sw().protocol_version))
     tree.set(S + (8, 0), lambda: _oct(sw().active_branch))
-    tree.set(S + (9, 0), lambda: rfc1902.Integer(truth(sw().online)))
+    # ICMP outranks the API's stale 'online' field -- see switch_online().
+    tree.set(S + (9, 0), lambda: rfc1902.Integer(truth(ctx.switch_online())))
     tree.set(S + (10, 0), lambda: _oct(sw().healthy_str))
     tree.set(S + (11, 0), lambda: _oct(sw().fan_status))
     tree.set(S + (12, 0), lambda: _oct(sw().ip))

@@ -123,6 +123,51 @@ fwProxyPollCount OBJECT-TYPE
     DESCRIPTION "Successful polls since the proxy started."
     ::= { fwProxy 6 }
 
+fwProxyIcmpStatus OBJECT-TYPE
+    SYNTAX      INTEGER { up(1), down(2), unknown(3), disabled(4) }
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Result of the proxy's own ICMP echo test against the real switch,
+         debounced over several consecutive checks.
+
+         Unlike every other object in this MIB, this one costs no MSP API
+         quota, so it stays valid while the API is rate limited and all
+         API-derived values have gone stale. It is therefore the object to
+         trust when fwProxyServingCache reads true(1).
+
+         unknown(3) means the test could not be carried out -- an unresolvable
+         ping target, or no permission to send ICMP -- which is deliberately
+         distinct from down(2). disabled(4) means no ping target is configured."
+    ::= { fwProxy 7 }
+
+fwProxyIcmpRtt OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "microseconds"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Round-trip time of the most recent successful ICMP echo, or zero if
+         the last check did not succeed. Microseconds rather than
+         milliseconds so sub-millisecond LAN round-trips are not truncated
+         to zero."
+    ::= { fwProxy 8 }
+
+fwProxyServingCache OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "true(1) while the port layout and counters being served come from
+         the proxy's on-disk cache rather than a live API poll, because the
+         API was unavailable when the proxy started.
+
+         This matters because cached counters do not advance, so every rate an
+         NMS derives from them is zero -- indistinguishable from a genuinely
+         idle switch unless this object is consulted. Check
+         fwProxyIcmpStatus for whether the switch itself is still alive."
+    ::= { fwProxy 9 }
+
 -- ==================================================================
 -- fwSwitch: switch-wide scalars
 -- ==================================================================
@@ -191,9 +236,14 @@ fwSwitchOnline OBJECT-TYPE
     MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION
-        "Whether the MSP cloud currently considers the switch online. This
-         is the cloud's view, not a direct reachability test from the proxy
-         host."
+        "Whether the switch is currently online.
+
+         Sourced from the proxy's own ICMP echo test when that has a confirmed
+         verdict, because the MSP cloud's 'online' field is only as fresh as
+         the last successful poll and can assert a switch is up long after it
+         stopped being so. Falls back to the cloud's view when ICMP is
+         disabled or has not yet debounced -- see fwProxyIcmpStatus to tell
+         which source is in effect."
     ::= { fwSwitch 9 }
 
 fwSwitchHealth OBJECT-TYPE

@@ -35,6 +35,16 @@ DEFAULT_COMMUNITY = "public"
 #: no realistic collision risk. Change it here if you register your own.
 DEFAULT_ENTERPRISE_OID = "1.3.6.1.4.1.99999"
 DEFAULT_STATE_FILE = "/var/lib/firewalla-snmp-proxy/counters.json"
+DEFAULT_TOPOLOGY_CACHE = "/var/lib/firewalla-snmp-proxy/topology.json"
+
+#: ICMP reachability defaults. The ping is free (it never touches the MSP API),
+#: so it runs far more often than the poll interval -- during a rate-limit
+#: lockout it is the only live signal available about the switch.
+DEFAULT_PING_INTERVAL = 60
+DEFAULT_PING_TIMEOUT = 2.0
+#: Asymmetric on purpose: coming back is unambiguous, going away is not.
+DEFAULT_PING_FAIL_THRESHOLD = 3
+DEFAULT_PING_RECOVER_THRESHOLD = 1
 
 #: Below this, MSP API rate limits and pointless load become a concern; the API
 #: itself only refreshes switch stats on the order of tens of seconds.
@@ -42,6 +52,16 @@ MIN_POLL_INTERVAL = 15
 
 #: Ceiling on rate-limit backoff, in seconds.
 DEFAULT_MAX_BACKOFF = 3600
+
+#: Ceiling on backoff during a startup that has NO cache to fall back on, in
+#: seconds. Deliberately much shorter than DEFAULT_MAX_BACKOFF: in that state
+#: the proxy is not listening at all, so the NMS sees the device as down, and
+#: the cost of probing a little more often is far lower than the cost of
+#: staying dark. The API's Retry-After can be a static hint rather than a real
+#: quota-reset time, so honouring it literally here can mean sitting dark for
+#: an hour after the quota has already cleared. Once a cache exists this cap
+#: is irrelevant -- the proxy serves from it and can afford to wait politely.
+DEFAULT_DARK_PROBE_MAX = 300
 
 #: Counter presentation. "ramp" interpolates between upstream refreshes so a
 #: slow poll interval still produces sane rates at a faster-polling NMS; "raw"
@@ -91,10 +111,23 @@ class Config:
     sys_contact: str = ""
     sys_location: str = ""
     state_file: str = DEFAULT_STATE_FILE
+    #: Last-known-good API payload, so startup can serve without the API.
+    #: Empty string disables caching (startup then blocks on the API).
+    topology_cache: str = DEFAULT_TOPOLOGY_CACHE
+    #: Host to ping for live switch reachability. Empty disables the check and
+    #: fwProxyIcmpStatus reports disabled(4). Prefer a hostname over a literal
+    #: IP so a DHCP change does not silently start reporting a dead switch.
+    ping_host: str = ""
+    ping_interval: int = DEFAULT_PING_INTERVAL
+    ping_timeout: float = DEFAULT_PING_TIMEOUT
+    ping_fail_threshold: int = DEFAULT_PING_FAIL_THRESHOLD
+    ping_recover_threshold: int = DEFAULT_PING_RECOVER_THRESHOLD
     counter_smoothing: str = DEFAULT_SMOOTHING
     # 0 means "derive from poll_interval" (DEFAULT_MAX_RAMP_FACTOR x interval).
     max_ramp_seconds: int = 0
     max_backoff_seconds: int = DEFAULT_MAX_BACKOFF
+    #: Backoff cap while unable to serve anything at all (no cache).
+    dark_probe_max_seconds: int = DEFAULT_DARK_PROBE_MAX
     box_gid: Optional[str] = None
     switches: List[SwitchConfig] = field(default_factory=list)
     verify_tls: bool = True
@@ -128,6 +161,14 @@ class Config:
             raise ConfigError("max_ramp_seconds cannot be negative")
         if self.max_backoff_seconds < 1:
             raise ConfigError("max_backoff_seconds must be at least 1")
+        if self.dark_probe_max_seconds < 1:
+            raise ConfigError("dark_probe_max_seconds must be at least 1")
+        if self.ping_interval < 1:
+            raise ConfigError("ping_interval must be at least 1 second")
+        if self.ping_timeout <= 0:
+            raise ConfigError("ping_timeout must be positive")
+        if self.ping_fail_threshold < 1 or self.ping_recover_threshold < 1:
+            raise ConfigError("ping thresholds must be at least 1")
         try:
             parts = [int(x) for x in str(self.enterprise_oid).split(".")]
         except ValueError as exc:
@@ -257,12 +298,28 @@ def load(path: Optional[str] = None) -> Config:
         sys_contact=str(data.get("sys_contact") or ""),
         sys_location=str(data.get("sys_location") or ""),
         state_file=str(data.get("state_file") or DEFAULT_STATE_FILE),
+        topology_cache=(
+            "" if data.get("topology_cache") in (False, "")
+            else str(data.get("topology_cache") or DEFAULT_TOPOLOGY_CACHE)
+        ),
+        ping_host=str(data.get("ping_host") or "").strip(),
+        ping_interval=int(data.get("ping_interval") or DEFAULT_PING_INTERVAL),
+        ping_timeout=float(data.get("ping_timeout") or DEFAULT_PING_TIMEOUT),
+        ping_fail_threshold=int(
+            data.get("ping_fail_threshold") or DEFAULT_PING_FAIL_THRESHOLD
+        ),
+        ping_recover_threshold=int(
+            data.get("ping_recover_threshold") or DEFAULT_PING_RECOVER_THRESHOLD
+        ),
         counter_smoothing=str(
             data.get("counter_smoothing") or DEFAULT_SMOOTHING
         ).strip().lower(),
         max_ramp_seconds=int(data.get("max_ramp_seconds") or 0),
         max_backoff_seconds=int(
             data.get("max_backoff_seconds") or DEFAULT_MAX_BACKOFF
+        ),
+        dark_probe_max_seconds=int(
+            data.get("dark_probe_max_seconds") or DEFAULT_DARK_PROBE_MAX
         ),
         box_gid=str(msp["box_gid"]) if msp.get("box_gid") else None,
         verify_tls=bool(data.get("verify_tls", True)),
