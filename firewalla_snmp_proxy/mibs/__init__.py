@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional
 
 from ..counters import CounterStore, as_counter32, as_counter64
 from ..model import Switch
+from ..ramp import CounterRamp
 
 # Poll status enum published as fwProxyPollStatus.
 POLL_OK, POLL_STALE, POLL_ERROR = 1, 2, 3
@@ -40,9 +41,15 @@ class SwitchContext:
         sys_location: str = "",
         proxy_version: str = "0.0.0",
         stale_after: float = 300.0,
+        ramp: Optional[CounterRamp] = None,
     ) -> None:
         self.switch = switch
         self.counters = counters
+        #: When set, counters are interpolated between upstream refreshes so a
+        #: slow poll interval still yields sane rates at the NMS's faster
+        #: cadence. None serves raw monotonic values. See
+        #: :mod:`~firewalla_snmp_proxy.ramp`.
+        self.ramp = ramp
         self.enterprise = tuple(int(x) for x in str(enterprise_oid).split("."))
         # sysObjectID.0 defaults into our own subtree, but can be pinned to a
         # legacy value so an NMS keeps recognising a replaced proxy as the same
@@ -78,11 +85,21 @@ class SwitchContext:
 
     # -- counters --------------------------------------------------------
     def counter(self, port_number: int, field: str, stats_since: Optional[int]) -> int:
-        """Monotonic value for one raw API counter field."""
+        """Monotonic value for one raw API counter field.
+
+        Evaluated per SNMP request, not per poll, which is what lets the ramp
+        return a different (larger) value on each of the NMS's polls between
+        two upstream refreshes.
+        """
         for p in self.switch.ports:
             if p.number == port_number:
-                return self.counters.update(
+                value = self.counters.update(
                     self.switch.mac, port_number, field, p.counter(field), stats_since
+                )
+                if self.ramp is None:
+                    return value
+                return self.ramp.value(
+                    CounterStore.key(self.switch.mac, port_number, field), value
                 )
         return 0
 

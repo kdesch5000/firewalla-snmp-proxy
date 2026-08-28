@@ -23,7 +23,12 @@ log = logging.getLogger(__name__)
 TOKEN_ENV = "FIREWALLA_MSP_TOKEN"
 
 DEFAULT_BASE_PORT = 16100
-DEFAULT_POLL_INTERVAL = 60
+#: 15 minutes. Each poll cycle costs several MSP API calls and the API
+#: enforces a quota, so the default is set by what the quota tolerates
+#: rather than by how fresh we would like the data to be. Counter ramping
+#: (see firewalla_snmp_proxy.ramp) is what makes an interval this long
+#: still produce usable rates at a 5-minute NMS.
+DEFAULT_POLL_INTERVAL = 900
 DEFAULT_COMMUNITY = "public"
 #: Placeholder enterprise OID. IANA is currently issuing PENs around 66649, so
 #: 99999 is unassigned and will remain so for the foreseeable future -- there is
@@ -34,6 +39,19 @@ DEFAULT_STATE_FILE = "/var/lib/firewalla-snmp-proxy/counters.json"
 #: Below this, MSP API rate limits and pointless load become a concern; the API
 #: itself only refreshes switch stats on the order of tens of seconds.
 MIN_POLL_INTERVAL = 15
+
+#: Ceiling on rate-limit backoff, in seconds.
+DEFAULT_MAX_BACKOFF = 3600
+
+#: Counter presentation. "ramp" interpolates between upstream refreshes so a
+#: slow poll interval still produces sane rates at a faster-polling NMS; "raw"
+#: publishes the last value fetched, which is correct but sawtooths when the
+#: NMS polls faster than this proxy does. See firewalla_snmp_proxy.ramp.
+SMOOTHING_MODES = ("ramp", "raw")
+DEFAULT_SMOOTHING = "ramp"
+
+#: Multiple of poll_interval past which ramping is abandoned for a sample.
+DEFAULT_MAX_RAMP_FACTOR = 2.5
 
 
 class ConfigError(RuntimeError):
@@ -73,6 +91,10 @@ class Config:
     sys_contact: str = ""
     sys_location: str = ""
     state_file: str = DEFAULT_STATE_FILE
+    counter_smoothing: str = DEFAULT_SMOOTHING
+    # 0 means "derive from poll_interval" (DEFAULT_MAX_RAMP_FACTOR x interval).
+    max_ramp_seconds: int = 0
+    max_backoff_seconds: int = DEFAULT_MAX_BACKOFF
     box_gid: Optional[str] = None
     switches: List[SwitchConfig] = field(default_factory=list)
     verify_tls: bool = True
@@ -97,6 +119,15 @@ class Config:
                 "seconds, so polling faster gains nothing and risks rate limits."
                 % (self.poll_interval, MIN_POLL_INTERVAL)
             )
+        if self.counter_smoothing not in SMOOTHING_MODES:
+            raise ConfigError(
+                "counter_smoothing must be one of %s, got %r"
+                % (", ".join(SMOOTHING_MODES), self.counter_smoothing)
+            )
+        if self.max_ramp_seconds < 0:
+            raise ConfigError("max_ramp_seconds cannot be negative")
+        if self.max_backoff_seconds < 1:
+            raise ConfigError("max_backoff_seconds must be at least 1")
         try:
             parts = [int(x) for x in str(self.enterprise_oid).split(".")]
         except ValueError as exc:
@@ -129,6 +160,18 @@ class Config:
                     % (seen_ports[sc.port], sc.mac, sc.port)
                 )
             seen_ports[sc.port] = sc.mac
+
+    @property
+    def ramp_window(self) -> float:
+        """Observed-window ceiling past which ramping is skipped.
+
+        Defaults to a multiple of ``poll_interval`` so it tracks the configured
+        cadence, but can be pinned explicitly when backoff is expected to
+        stretch the real interval well past that.
+        """
+        if self.max_ramp_seconds:
+            return float(self.max_ramp_seconds)
+        return float(self.poll_interval) * DEFAULT_MAX_RAMP_FACTOR
 
     def community_for(self, sc: SwitchConfig) -> str:
         return sc.community or self.community
@@ -214,6 +257,13 @@ def load(path: Optional[str] = None) -> Config:
         sys_contact=str(data.get("sys_contact") or ""),
         sys_location=str(data.get("sys_location") or ""),
         state_file=str(data.get("state_file") or DEFAULT_STATE_FILE),
+        counter_smoothing=str(
+            data.get("counter_smoothing") or DEFAULT_SMOOTHING
+        ).strip().lower(),
+        max_ramp_seconds=int(data.get("max_ramp_seconds") or 0),
+        max_backoff_seconds=int(
+            data.get("max_backoff_seconds") or DEFAULT_MAX_BACKOFF
+        ),
         box_gid=str(msp["box_gid"]) if msp.get("box_gid") else None,
         verify_tls=bool(data.get("verify_tls", True)),
         source_path=path,

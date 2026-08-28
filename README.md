@@ -345,13 +345,9 @@ That is a property of the Firewalla cloud, not of this proxy, and it has
 consequences no amount of proxy polling can fix:
 
 - **Your effective graph resolution is ~5 minutes**, however fast your NMS polls.
-- **If your NMS polls near the same 5-minute cadence, expect sawtooth graphs**:
-  some intervals show zero traffic and the next shows double. If that bothers
-  you, poll your NMS *slower* (10-15 min) for smoother averages, or accept the
-  jitter and read the trend rather than individual points.
-- **Rate spikes shorter than ~5 minutes are invisible.** The counters are
+- **Rate spikes shorter than the poll interval are invisible.** The counters are
   cumulative and accurate, so totals over an hour are right; a 30-second burst
-  just gets averaged into its 5-minute bucket.
+  gets averaged across its bucket.
 - **Don't build fast link-flap detection on this.** A port going down appears on
   the first poll after the cloud notices.
 
@@ -360,14 +356,81 @@ with *identical* values, so they share one cache — there is no fresher endpoin
 to prefer, and the proxy makes one topology call per cycle rather than one per
 switch.
 
-**What this means for `poll_interval`.** The 60s default is deliberately faster
-than the 5-minute data cadence: it costs a handful of cheap API calls and means a
-new value reaches your NMS within a minute of the cloud publishing it, rather
-than up to 5 minutes later. Setting it to 300 would halve your API traffic at the
-cost of that latency. Setting it below 15s is rejected — it cannot gain you
-anything and risks rate limits.
-
 `fwProxyApiLatency` reports what each API round-trip actually costs.
+
+### Rate limits, and why `poll_interval` defaults to 15 minutes
+
+**The MSP API enforces a request quota.** Each poll cycle costs several calls
+(`/topology`, `/switch-settings`, `/switches/<mac>`, plus a periodic
+`/devices`), so a fast interval burns through it steadily. Once the quota is
+exhausted the API returns **HTTP 429 to everything** until it resets.
+
+That failure is dangerous precisely because it is quiet. The proxy keeps
+answering SNMP, the counters simply stop advancing, and every rate your NMS
+derives from them is a legitimate-looking **zero**. Nothing looks broken; the
+graph just goes flat. This is not hypothetical — it is what prompted the 2.1.0
+release, after a 429 lockout silently flatlined a port's graph for hours.
+
+Two mechanisms address it:
+
+**1. A 15-minute default interval.** `poll_interval: 900` keeps well clear of
+the quota. The old 60s default was chosen to minimise latency behind the
+cloud's ~5-minute data cadence, which was the wrong thing to optimise: it
+bought a few minutes of freshness at the cost of ~4,300 API calls a day.
+
+**2. Exponential backoff on 429.** On a rate-limit response the poller stops
+issuing requests entirely until the backoff expires — retrying through a 429
+keeps the quota pinned and can extend the lockout. Backoff starts at
+`poll_interval`, doubles per consecutive 429, is jittered (so several proxies
+sharing a token don't retry in lockstep and re-trip the quota together), and is
+capped by `max_backoff_seconds` (default 3600). A `Retry-After` header from the
+API always wins over the computed delay. Recovery needs no operator: the first
+successful cycle resets the schedule.
+
+While backed off, `fwProxyLastError` says so explicitly and
+`fwProxySecondsSincePoll` keeps climbing — **alert on those**, not on traffic
+rates, which cannot distinguish a rate limit from a quiet switch.
+
+### Counter smoothing: a slow poll for a fast NMS
+
+A 15-minute interval creates a cadence mismatch, because most NMSes poll faster
+and on a schedule you can't change — Observium's poller is a fixed 5-minute
+cron. Served raw, that produces a **sawtooth**: two of every three polls see
+byte-identical counters and derive a rate of zero, and the third divides 900s of
+traffic by 300s, overstating the rate by 3x. Every individual sample is wrong,
+and only after RRA consolidation does the average return to the truth.
+
+`counter_smoothing: ramp` (the default) fixes this in the proxy, so you don't
+have to touch your NMS's polling at all. Each newly-learned increment is spread
+evenly across the window *following* the poll that revealed it, so a 5-minute
+poller sees a third of it each time and derives the same correct rate every
+sample. Specifically, for counter values `C1` at `T1` and `C2` at `T2`, a
+request at `t` is served `C1 + (C2 - C1) * (t - T2) / (T2 - T1)`, clamped.
+
+What this buys and what it costs:
+
+- **Byte totals stay exact.** Nothing is invented or discarded; the same bytes
+  are redistributed across the window instead of dumped into one sample.
+- **The window is measured, not configured.** `T2 - T1` is observed, so if a
+  backoff stretches the real interval to 40 minutes, the ramp stretches with it
+  automatically.
+- **Output stays monotonically non-decreasing**, as SNMP counters must be.
+- **The graph lags by up to one interval.** At `T2` we know how many bytes
+  arrived since `T1` but nothing about what is arriving now, so this is the
+  price of not extrapolating.
+- **Sub-window bursts are flattened.** A 30-second 900 Mbps burst inside a
+  15-minute window reads as ~30 Mbps sustained. The API does not carry
+  within-window traffic shape, so the alternative isn't better resolution — it's
+  the sawtooth above, which is a worse misrepresentation.
+- **A stalled API still reads as zero, not as invented traffic.** The ramp
+  advances on counter *changes*, not on the poll loop firing, so an idle port
+  and a frozen upstream both correctly plateau.
+
+Set `counter_smoothing: raw` to publish values unmodified — correct if your NMS
+polls at or slower than `poll_interval`. `max_ramp_seconds` caps the observed
+window past which ramping is skipped (0 derives it as 2.5x `poll_interval`), so
+a multi-hour outage's accumulated bytes aren't smeared across an equally long
+ramp, which would hide the recovery.
 
 ## Configuration
 
@@ -377,7 +440,9 @@ option with comments. The essentials:
 ```yaml
 msp:
   domain: "dn-abc123.firewalla.net"
-poll_interval: 60
+poll_interval: 900         # 15 min; see "Rate limits" above
+counter_smoothing: ramp    # or "raw"; see "Counter smoothing" above
+max_backoff_seconds: 3600  # ceiling on 429 backoff
 listen:
   address: "127.0.0.1"     # 0.0.0.0 to allow a remote NMS
   base_port: 16100         # one port per switch

@@ -2,6 +2,105 @@
 
 All notable changes to this project are documented here.
 
+## [2.1.0] - 2026-08-28
+
+Survives the MSP API's request quota, and stops a slow poll interval from
+producing garbage rates at a faster-polling NMS.
+
+**Why:** a 429 lockout silently flatlined a port's graph for nearly three hours.
+The proxy kept answering SNMP and the counters simply stopped advancing, so every
+rate Observium derived was a legitimate-looking zero — nothing appeared broken.
+The 60s poll interval had been spending ~4,300 API calls a day to buy a few
+minutes of freshness behind a cloud that only refreshes data every ~5 minutes.
+
+### Added
+
+- **Exponential backoff on HTTP 429/503** (`poller.py`). On a rate-limit
+  response the poller stops issuing requests entirely until the backoff
+  expires; retrying through a 429 keeps the quota pinned and can extend the
+  lockout. Backoff starts at `poll_interval`, doubles per consecutive strike,
+  is jittered by ±20% (so proxies sharing a token don't retry in lockstep and
+  re-trip the quota together), and is capped by the new `max_backoff_seconds`
+  (default 3600). The first successful cycle resets the schedule, so recovery
+  needs no operator.
+- **`MspRateLimited` exception** with `Retry-After` parsing (`msp_api.py`),
+  accepting both delta-seconds and HTTP-date forms per RFC 9110. The server's
+  own guidance always wins over the computed delay. Raised for 503 as well as
+  429, since both mean "stop calling".
+- **Counter ramping** — new `firewalla_snmp_proxy.ramp` module, enabled by
+  `counter_smoothing: ramp` (the default). Spreads each newly-learned increment
+  evenly across the window following the poll that revealed it, so an NMS
+  polling faster than `poll_interval` derives a steady, correct rate instead of
+  a 0/0/3x sawtooth. Byte totals stay exact, output stays monotonic, and the
+  ramp window is *measured* rather than configured — so it self-adapts when a
+  backoff stretches the real interval. Costs one interval of lag and flattens
+  sub-window bursts; the API does not carry within-window traffic shape, so
+  that detail was never available to publish. `counter_smoothing: raw` restores
+  the previous behaviour.
+- **Startup backoff** (`cli.py:_startup`). Startup resolves the box and builds
+  agents *before* the poller exists, so it needs its own backoff. Exiting on a
+  429 there would be actively harmful: `Restart=on-failure` with a 15s
+  `RestartSec` would crash-loop against the rate-limited API, spending several
+  calls every 15 seconds and pinning the quota indefinitely. Startup now
+  retries in-process on the shared backoff schedule and never exits for a rate
+  limit. Non-rate-limit errors (bad token, switch absent from topology) still
+  fail immediately and loudly.
+- **`max_ramp_seconds`** — observed-window ceiling past which ramping is
+  skipped for that sample (0 derives it as 2.5x `poll_interval`). Stops a long
+  outage's accumulated bytes from being smeared across an equally long ramp,
+  which would hide the recovery.
+- 46 new tests (166 total), covering the interpolation math, monotonicity
+  across irregular windows, 64-bit precision, `Retry-After` parsing, the
+  backoff schedule and cap, and an end-to-end simulation of a 5-minute NMS
+  against a 15-minute proxy interval asserting steady rates and exact
+  conservation of octets.
+
+### Changed
+
+- **`poll_interval` default is now 900 (15 minutes)**, up from 60. The old
+  default optimised for latency behind a data source that only updates every
+  ~5 minutes, at the cost of quota headroom. Counter ramping is what makes an
+  interval this long still produce usable graphs. Existing configs are
+  unaffected — this only changes the default for new ones.
+- `MspRateLimited` now propagates out of `poll_once()` from anywhere in the
+  cycle, including the optional network-name and per-switch-detail calls.
+  Previously `network_names()` swallowed all `MspError`s, which hid a 429 from
+  the backoff logic entirely. All other errors are still degraded locally so
+  one bad sub-request cannot cost a whole cycle.
+- Startup log line and `check` output now report the smoothing mode and backoff
+  cap.
+
+### Fixed
+
+- A rate limit hitting `switch_settings()` escaped `poll_once()` as an
+  unhandled exception and was logged with a full traceback by the generic
+  handler in `run()`, once per cycle, indefinitely. It is now a recognised
+  state with a one-line warning naming the resume time.
+
+### Known limitation
+
+- **Restarting the proxy while rate limited leaves it not listening.** The SNMP
+  sockets are bound by `_build_contexts`, which needs the topology to know how
+  many ports to serve, so during a startup backoff there is no listener and the
+  NMS sees the device as *down* rather than as *stale*. This is still an
+  improvement on 2.0.0, which crash-looped in the same situation (also not
+  listening, and hammering the API), but it is not the right end state.
+
+  Serving a truncated `ifTable` instead was considered and rejected: Observium
+  marks ports absent from `ifTable` as deleted, which would discard the very
+  port history this release exists to protect. The correct fix is to cache the
+  last-known-good topology and rebuild agents from it during a lockout, serving
+  the full port set with `fwProxyPollStatus = error(3)`. Not implemented yet.
+
+### Operational notes
+
+- **Alert on `fwProxyLastError` and `fwProxySecondsSincePoll`, not on traffic
+  rates.** A rate of zero cannot distinguish a rate-limited proxy from a quiet
+  switch. During backoff `fwProxyLastError` says so explicitly and names the
+  resume time.
+- `fwProxyPollStatus` already derives its stale threshold from `poll_interval`
+  (`max(300, 3x interval)`), so a 900s interval does not make it read stale.
+
 ## [2.0.0] - 2026-08-27
 
 First public release. Republishes Firewalla Switch data from the MSP cloud API

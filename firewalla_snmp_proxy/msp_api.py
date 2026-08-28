@@ -21,6 +21,8 @@ Two defensive behaviours are deliberate and non-obvious:
 
 from __future__ import annotations
 
+import datetime
+import email.utils
 import json
 import logging
 import socket
@@ -50,7 +52,7 @@ FORBIDDEN_SEGMENTS = frozenset(
 )
 
 DEFAULT_TIMEOUT = 20.0
-USER_AGENT = "firewalla-snmp-proxy/0.1 (+https://github.com/kdesch5000/firewalla-snmp-proxy)"
+USER_AGENT = "firewalla-snmp-proxy/2.1 (+https://github.com/kdesch5000/firewalla-snmp-proxy)"
 
 
 class MspError(RuntimeError):
@@ -64,6 +66,51 @@ class MspAuthError(MspError):
 class MspNotJson(MspError):
     """Endpoint returned non-JSON -- almost always the SPA index.html fallback,
     meaning the path does not exist on this MSP tenant."""
+
+
+class MspRateLimited(MspError):
+    """Quota exhausted (HTTP 429), or the API is shedding load (HTTP 503).
+
+    Distinct from a generic :class:`MspError` because the correct response is
+    different in kind: not "retry on the usual schedule and log a warning" but
+    "stop calling for a while". Retrying a 429 at the normal interval keeps the
+    quota pinned and can extend the lockout, so the poller backs off on this.
+
+    :attr:`retry_after` carries the server's own guidance when it sends a
+    ``Retry-After`` header, which is always preferable to a guess.
+    """
+
+    def __init__(self, message: str, retry_after: Optional[float] = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Parse a ``Retry-After`` header into seconds from now.
+
+    RFC 9110 allows either delta-seconds or an HTTP-date, and real APIs send
+    both, so both are handled. Anything unparseable returns None so the caller
+    falls back to its own backoff schedule rather than trusting a bad value.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        # An HTTP-date is by definition GMT; treat a naive result as such
+        # rather than as local time, which would skew by the UTC offset.
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    delta = (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+    return max(0.0, delta)
 
 
 class MspClient:
@@ -133,6 +180,13 @@ class MspClient:
                     "MSP API rejected the token (HTTP %d). Regenerate it in the "
                     "Firewalla MSP web UI under account settings." % exc.code
                 ) from exc
+            if exc.code in (429, 503):
+                retry_after = parse_retry_after(
+                    exc.headers.get("Retry-After") if exc.headers else None
+                )
+                raise MspRateLimited(
+                    "HTTP %d from %s" % (exc.code, url), retry_after
+                ) from exc
             raise MspError("HTTP %d from %s" % (exc.code, url)) from exc
         except (urllib.error.URLError, socket.timeout, ssl.SSLError, OSError) as exc:
             raise MspError("cannot reach %s: %s" % (url, exc)) from exc
@@ -198,6 +252,10 @@ class MspClient:
                 net = dev.get("network") or {}
                 if net.get("id") and net.get("name"):
                     out[str(net["id"])] = str(net["name"])
+        except MspRateLimited:
+            # Must not be swallowed: the poller needs to see this to back off,
+            # and network names are the least important thing in a cycle.
+            raise
         except MspError as exc:
             log.warning("could not resolve network names: %s", exc)
         return out

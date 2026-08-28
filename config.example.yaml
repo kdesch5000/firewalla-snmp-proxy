@@ -26,10 +26,45 @@ msp:
 
 # Seconds between MSP API polls. Minimum 15.
 #
-# There is no benefit to polling faster than the cloud API refreshes its own
-# switch statistics -- see "How fresh is the data?" in the README. 60 is a
-# sensible default and matches what most NMSes poll at.
-poll_interval: 60
+# This is the main knob for staying under the MSP API's request quota: each
+# cycle costs several calls, and once the quota is exhausted the API returns
+# HTTP 429 to everything until it resets. 900 (15 minutes) is a safe default.
+#
+# You do NOT need to match your NMS's polling interval here -- see
+# counter_smoothing below, and "How fresh is the data?" in the README.
+poll_interval: 900
+
+# How counters are presented between MSP refreshes.
+#
+#   ramp - Spread each newly-learned increment evenly across the window that
+#          follows the poll which revealed it. This lets an NMS polling faster
+#          than poll_interval compute correct rates: a 5-minute poller against
+#          a 15-minute interval sees a third of the increment each time,
+#          instead of zero, zero, then a 3x spike. Byte totals stay exact and
+#          the ramp window is measured, so it self-adapts if a rate-limit
+#          backoff stretches the real interval.
+#
+#          Costs: the graph lags by up to one poll interval, and bursts shorter
+#          than the interval are averaged out. The API does not carry
+#          within-window traffic shape, so that detail is not available to
+#          publish either way.
+#
+#   raw  - Publish the last value fetched, unmodified. Correct if your NMS
+#          polls at or slower than poll_interval; sawtooths if it polls faster.
+counter_smoothing: ramp
+
+# Observed-window ceiling past which ramping is skipped for that sample, in
+# seconds. 0 derives it from poll_interval (2.5x). Prevents a long outage's
+# accumulated bytes from being smeared across an equally long ramp, which would
+# hide the recovery.
+max_ramp_seconds: 0
+
+# Ceiling on exponential backoff after the MSP API returns HTTP 429, in
+# seconds. Backoff starts at poll_interval, doubles per consecutive 429, and is
+# jittered. A Retry-After header from the API always wins over the computed
+# delay. While backed off the poller issues no requests at all -- retrying
+# through a 429 keeps the quota pinned and can extend the lockout.
+max_backoff_seconds: 3600
 
 listen:
   # 127.0.0.1 is the safe default: only this host can poll the proxy. Set to

@@ -16,6 +16,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from typing import Dict, List, Optional
 
 from . import __version__
@@ -29,10 +30,11 @@ from .config import (
     load,
 )
 from .counters import CounterStore
+from .ramp import CounterRamp
 from .mibs import SwitchContext
 from .model import Switch
-from .msp_api import MspClient, MspError
-from .poller import Poller
+from .msp_api import MspClient, MspError, MspRateLimited
+from .poller import Poller, rate_limit_delay
 
 log = logging.getLogger("firewalla_snmp_proxy")
 
@@ -86,6 +88,13 @@ def _resolve_gid(client: MspClient, cfg: Config) -> str:
 def _build_contexts(cfg: Config, client: MspClient, gid: str) -> Dict[str, SwitchAgent]:
     """Fetch each configured switch once and build its agent (unbound)."""
     counters = CounterStore(cfg.state_file)
+    # One ramp shared by every agent: its state is keyed by switch MAC, and a
+    # per-agent instance would reset whenever the tree was rebuilt.
+    ramp = (
+        CounterRamp(cfg.ramp_window)
+        if cfg.counter_smoothing == "ramp"
+        else None
+    )
     networks = client.network_names(gid)
     settings = client.switch_settings(gid)
     nodes = {
@@ -126,6 +135,7 @@ def _build_contexts(cfg: Config, client: MspClient, gid: str) -> Dict[str, Switc
             sys_location=cfg.sys_location,
             proxy_version=__version__,
             stale_after=max(300.0, cfg.poll_interval * 3.0),
+            ramp=ramp,
         )
         ctx.poll_count = 1
         ctx.last_poll_ok = _time.time()
@@ -229,10 +239,28 @@ msp:
   # token_file: /etc/firewalla-snmp-proxy/token
   # token: "..."
 
-# How often to refresh from the MSP API, in seconds. The API updates switch
-# statistics on the order of tens of seconds; 60 is a good default and the
-# minimum accepted is 15.
-poll_interval: 60
+# How often to refresh from the MSP API, in seconds. The MSP API enforces a
+# request quota, and each cycle costs several calls, so this is the main knob
+# for staying under it: 900 (15 min) is a safe default, and the minimum
+# accepted is 15. Polling faster than the API's own stat refresh gains nothing.
+poll_interval: 900
+
+# How counters are presented between MSP refreshes.
+#
+#   ramp - spread each newly-learned increment evenly over the following
+#          window, so an NMS polling faster than poll_interval still computes
+#          sane rates instead of a 0/0/3x sawtooth. Totals stay exact; the
+#          graph lags by up to one window and sub-window bursts are averaged.
+#   raw  - publish the last value fetched, unmodified.
+counter_smoothing: ramp
+
+# Observed-window ceiling past which ramping is skipped, in seconds. 0 derives
+# it from poll_interval (2.5x), which is usually what you want.
+max_ramp_seconds: 0
+
+# Ceiling on exponential backoff after an HTTP 429, in seconds. A Retry-After
+# header from the API always takes precedence over the computed delay.
+max_backoff_seconds: 3600
 
 listen:
   # 127.0.0.1 is the safe default. Change to 0.0.0.0 to let an NMS on another
@@ -305,6 +333,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     print("config      : %s" % path)
     print("msp domain  : %s" % cfg.domain)
     print("poll interval: %ds" % cfg.poll_interval)
+    print("smoothing   : %s%s" % (
+        cfg.counter_smoothing,
+        " (ramp window %ds)" % int(cfg.ramp_window)
+        if cfg.counter_smoothing == "ramp" else "",
+    ))
     print("enterprise  : %s" % cfg.enterprise_oid)
 
     client = _client(cfg)
@@ -394,17 +427,48 @@ def _fmt(value) -> str:
 
 
 # -- run -----------------------------------------------------------------
+async def _startup(cfg: Config, client: MspClient):
+    """Resolve the box and build agents, waiting out any rate limit.
+
+    Startup necessarily hits the API before the poller exists, so it needs its
+    own backoff. Exiting on a 429 instead would be actively harmful: systemd's
+    ``Restart=on-failure`` with a 15s ``RestartSec`` would crash-loop against
+    the rate-limited API, spending several calls every 15 seconds and keeping
+    the quota pinned indefinitely. Retrying in-process, slowly, cannot.
+    """
+    strikes = 0
+    while True:
+        try:
+            gid = _resolve_gid(client, cfg)
+            return gid, _build_contexts(cfg, client, gid)
+        except MspRateLimited as exc:
+            strikes += 1
+            delay = rate_limit_delay(
+                exc, cfg.poll_interval, strikes, float(cfg.max_backoff_seconds)
+            )
+            log.warning(
+                "MSP API rate limited during startup (attempt %d): %s -- "
+                "retrying in %ds (~%s). Staying up rather than exiting, so "
+                "systemd cannot restart us straight back into the rate limit.",
+                strikes, exc, int(delay),
+                time.strftime("%H:%M:%S", time.localtime(time.time() + delay)),
+            )
+            await asyncio.sleep(delay)
+
+
 async def _serve(cfg: Config) -> int:
     client = _client(cfg)
-    gid = _resolve_gid(client, cfg)
-    agents = _build_contexts(cfg, client, gid)
+    gid, agents = await _startup(cfg, client)
 
     counters = CounterStore(cfg.state_file)
     for agent in agents.values():
         agent.ctx.counters = counters
         agent.start()
 
-    poller = Poller(client, gid, agents, counters, cfg.poll_interval)
+    poller = Poller(
+        client, gid, agents, counters, cfg.poll_interval,
+        max_backoff=float(cfg.max_backoff_seconds),
+    )
 
     loop = asyncio.get_running_loop()
     stopping = asyncio.Event()
@@ -422,7 +486,10 @@ async def _serve(cfg: Config) -> int:
 
     poll_task = asyncio.create_task(poller.run())
     log.info(
-        "serving %d switch(es); poll interval %ds", len(agents), cfg.poll_interval
+        "serving %d switch(es); poll interval %ds; smoothing %s; "
+        "rate-limit backoff capped at %ds",
+        len(agents), cfg.poll_interval, cfg.counter_smoothing,
+        cfg.max_backoff_seconds,
     )
     await stopping.wait()
     poll_task.cancel()
