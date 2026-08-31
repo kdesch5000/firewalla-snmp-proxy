@@ -4,7 +4,23 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-Project infrastructure and documentation only — no behaviour change.
+Mostly project infrastructure and documentation, plus one Python 3.9 fix that
+the new CI surfaced immediately.
+
+### Fixed
+
+- **`Poller` could only be constructed from inside a running event loop.**
+  `__init__` built `asyncio.Event()` eagerly, and on Python 3.9 that binds to
+  the current loop at construction and raises `RuntimeError: There is no
+  current event loop` when there isn't one. Production was unaffected — the
+  poller is built inside `asyncio.run` — but the constraint was undocumented,
+  invisible, and broke the test suite on the oldest supported interpreter.
+
+  Stop state is now a plain flag plus a lazily-created Event. Beyond fixing
+  3.9, this makes `stop()` safe to call *before* `run()` starts, which the
+  Event alone could not express: a stop requested that early used to be lost.
+  Three regression tests cover construction outside a loop, stop-before-run,
+  and stop-during-run.
 
 ### Added
 

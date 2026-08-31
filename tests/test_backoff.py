@@ -311,3 +311,50 @@ def test_startup_propagates_non_rate_limit_errors(monkeypatch):
     monkeypatch.setattr(cli, "_resolve_gid", broken)
     with pytest.raises(MspError):
         asyncio.run(cli._startup(cfg, FakeClient()))
+
+
+def test_poller_is_constructible_outside_a_running_loop():
+    """Regression: Python 3.9 binds asyncio.Event to a loop at construction.
+
+    Building the stop Event in ``__init__`` made a Poller constructible only
+    from inside a running loop, which broke on 3.9 (RuntimeError: there is no
+    current event loop). Production happened to be safe because the Poller is
+    built inside ``asyncio.run``, but the constraint was invisible and only
+    showed up under test.
+    """
+    p = _poller(FakeClient())
+    assert p._stop is None  # not created until the loop needs it
+    assert p._stopped is False
+
+
+def test_stop_before_run_is_honoured():
+    """stop() must work before the loop exists, and must keep run() from polling."""
+    client = FakeClient()
+    p = _poller(client)
+    p.stop()  # no loop has ever run
+    assert p._stopped is True
+
+    calls = {"n": 0}
+    original = p.poll_once
+
+    def counting():
+        calls["n"] += 1
+        return original()
+
+    p.poll_once = counting
+    asyncio.run(asyncio.wait_for(p.run(), timeout=5))
+    assert calls["n"] == 0  # returned immediately, issued no request
+
+
+def test_stop_during_run_breaks_the_loop():
+    """The Event path still works: stop() while running ends run() promptly."""
+    p = _poller(FakeClient(), interval=3600)
+
+    async def drive():
+        task = asyncio.ensure_future(p.run())
+        await asyncio.sleep(0)  # let run() reach its first wait
+        p.stop()
+        await asyncio.wait_for(task, timeout=5)
+
+    asyncio.run(drive())
+    assert p._stopped is True

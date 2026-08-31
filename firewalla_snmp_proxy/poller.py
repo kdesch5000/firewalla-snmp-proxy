@@ -96,7 +96,14 @@ class Poller:
         self.snapshot = snapshot
         self._networks: Dict[str, str] = {}
         self._networks_at: float = 0.0
-        self._stop = asyncio.Event()
+        #: Stop is tracked by a plain flag plus a lazily-created Event. On
+        #: Python 3.9 ``asyncio.Event()`` binds to the current loop at
+        #: construction and raises when there isn't one, so building it in
+        #: ``__init__`` would make a Poller constructible only from inside a
+        #: running loop. The flag also makes ``stop()`` safe to call before
+        #: ``run()`` has started -- the Event alone could not express that.
+        self._stopped = False
+        self._stop: Optional[asyncio.Event] = None
         #: Consecutive rate-limit responses; drives the exponential schedule.
         self._strikes = 0
         #: monotonic() deadline before which no request may be issued.
@@ -218,9 +225,22 @@ class Poller:
     def in_backoff(self) -> bool:
         return time.monotonic() < self._backoff_until
 
+    def _stop_event(self) -> asyncio.Event:
+        """The stop Event, created on first use from inside the running loop.
+
+        Call only from coroutine context; see ``_stopped`` in ``__init__`` for
+        why this is not built eagerly.
+        """
+        if self._stop is None:
+            self._stop = asyncio.Event()
+            if self._stopped:
+                self._stop.set()
+        return self._stop
+
     # -- loop ------------------------------------------------------------
     async def run(self) -> None:
-        while not self._stop.is_set():
+        stop = self._stop_event()
+        while not self._stopped:
             if self.in_backoff:
                 # Skip the cycle outright rather than calling and eating another
                 # 429; the whole point of backing off is to stop the requests.
@@ -243,7 +263,7 @@ class Poller:
                 except MspRateLimited as exc:
                     wait = self._enter_backoff(exc)
                     try:
-                        await asyncio.wait_for(self._stop.wait(), timeout=wait)
+                        await asyncio.wait_for(stop.wait(), timeout=wait)
                     except asyncio.TimeoutError:
                         pass
                     continue
@@ -253,10 +273,12 @@ class Poller:
                 elapsed = time.monotonic() - started
                 wait = max(1.0, self.interval - elapsed)
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=wait)
+                await asyncio.wait_for(stop.wait(), timeout=wait)
             except asyncio.TimeoutError:
                 pass
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stopped = True
+        if self._stop is not None:
+            self._stop.set()
         self.counters.save(force=True)
