@@ -62,9 +62,11 @@ fi
 
 # ------------------------------------------------------------------ locate
 BIN=""
+# Home-directory paths are checked last and only so the error below can name
+# them; ProtectHome=yes in the generated unit rules them out as ExecStart.
 for candidate in \
-    "$(command -v ${SERVICE_NAME} 2>/dev/null || true)" \
     "/usr/local/bin/${SERVICE_NAME}" \
+    "$(command -v ${SERVICE_NAME} 2>/dev/null || true)" \
     "/root/.local/bin/${SERVICE_NAME}" \
     "${HOME:-/root}/.local/bin/${SERVICE_NAME}"
 do
@@ -85,6 +87,27 @@ fi
 info "Using executable: ${BIN}"
 
 "$BIN" --version >/dev/null 2>&1 || die "${BIN} --version failed; is the install broken?"
+
+# The generated unit sets ProtectHome=yes, which makes /home, /root and
+# /run/user inaccessible to the service. A binary under either would therefore
+# fail to exec with status 203 -- and confusingly, it runs fine by hand. Catch
+# it here rather than letting systemd report it as a mystery.
+case "${BIN}" in
+    /home/*|/root/*)
+        die "the executable is at ${BIN}, inside a home directory.
+
+The service sandbox sets ProtectHome=yes, so systemd cannot execute anything
+under /home or /root -- the unit would fail with status 203/EXEC even though
+the binary works fine from your shell.
+
+Install it system-wide instead, then re-run this script:
+
+    pipx uninstall firewalla-snmp-proxy      # as the user who installed it
+    sudo pipx --global install firewalla-snmp-proxy
+
+That puts it in /usr/local/bin, which the sandbox can reach."
+        ;;
+esac
 
 # -------------------------------------------------------------------- user
 if id -u "${RUN_USER}" >/dev/null 2>&1; then

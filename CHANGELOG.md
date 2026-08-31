@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here.
 
+## [2.2.3] - 2026-08-31
+
+### Fixed
+
+- **`install.sh` could generate a unit that cannot start.** Its binary search
+  included `/root/.local/bin` and `$HOME/.local/bin`, but the unit it writes
+  sets `ProtectHome=yes`, which makes `/home`, `/root` and `/run/user`
+  inaccessible to the service. A per-user `pipx install` therefore produced an
+  `ExecStart` that failed with status 203/EXEC — while the same binary ran fine
+  by hand, which makes it a genuinely confusing failure.
+
+  `install.sh` now checks `/usr/local/bin` first and refuses outright if the
+  binary it found sits under `/home` or `/root`, naming the fix
+  (`sudo pipx --global install`) instead of writing a broken unit.
+
+### Changed
+
+- README's service section now leads with why you want a service at all, and
+  states that the binary must be installed system-wide *before* running
+  `install.sh`. The quick start says explicitly that `run` is a foreground
+  command and links to the service section. Following the quick start and then
+  the service section in order previously produced the 203/EXEC case above.
+
 ## [2.2.2] - 2026-08-31
 
 ### Fixed

@@ -83,7 +83,10 @@ sudo ln -sf /opt/firewalla-snmp-proxy-venv/bin/firewalla-snmp-proxy /usr/local/b
 ```
 
 Step 4 binds no sockets, so it is safe to run while something else is already
-listening on the port.
+listening on the port. Step 5 runs in the foreground, which is what you want
+while trying it out — for anything permanent see
+[Install as a service](#install-as-a-service), which restarts on failure and
+survives a reboot.
 
 Then, from anywhere that can reach the proxy:
 
@@ -101,11 +104,28 @@ another host.
 
 ### Install as a service
 
-From the same clone:
+You almost certainly want this. Running `run` in a shell means it dies with
+your session and does not come back after a reboot; a monitoring source that
+quietly stops is worse than one that was never there.
+
+**Install the binary system-wide first.** The generated unit sets
+`ProtectHome=yes`, so systemd cannot execute anything under `/home` or `/root`
+— a per-user `pipx install` produces a binary the service is unable to start,
+even though it runs fine from your shell:
+
+```bash
+pipx uninstall firewalla-snmp-proxy        # if you installed it as yourself
+sudo pipx --global install firewalla-snmp-proxy
+```
+
+Then, from a clone of this repo (for `install.sh` itself):
 
 ```bash
 sudo ./install.sh --service          # or: --service --user snmpproxy
 ```
+
+`install.sh` refuses to proceed with a home-directory binary rather than
+writing a unit that cannot start.
 
 The systemd unit is **generated** from the detected binary path, service user
 and config location — there is nothing to hand-edit. It creates a locked-down
