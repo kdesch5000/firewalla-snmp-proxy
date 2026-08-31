@@ -1,8 +1,8 @@
 name: Publish to PyPI
 
-# Publishes on a version tag. Uses PyPI Trusted Publishing (OIDC), so there is
-# no API token stored in this repository -- PyPI verifies the workflow identity
-# directly. Configure the publisher once at
+# Publishes on a version tag, and only on a version tag. Uses PyPI Trusted
+# Publishing (OIDC), so no API token is stored in this repository -- PyPI
+# verifies the workflow identity directly. Configure the publisher once at
 # https://pypi.org/manage/project/firewalla-snmp-proxy/settings/publishing/
 # with: owner=kdesch5000, repo=firewalla-snmp-proxy,
 #       workflow=release.yml, environment=pypi
@@ -47,6 +47,12 @@ jobs:
 
   publish:
     needs: build
+    # Only a tag push may publish. workflow_dispatch is deliberately allowed to
+    # reach `build` (a useful dry run of packaging) but never `publish`: a
+    # dispatch carries no tag, so the version-parity check above cannot run,
+    # and a PyPI upload is irreversible -- a version number burned by mistake
+    # can never be reused.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

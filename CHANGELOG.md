@@ -2,10 +2,10 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [2.2.1] - 2026-08-31
 
 Mostly project infrastructure and documentation, plus one Python 3.9 fix that
-the new CI surfaced immediately.
+the new CI surfaced immediately. First release published to PyPI.
 
 ### Fixed
 
@@ -38,6 +38,14 @@ the new CI surfaced immediately.
   how to contribute a fixture for a switch model other than the SE.
 - Issue templates for bugs, features and switch-model reports, plus a contact
   link routing security reports to a private advisory.
+
+### Security
+
+- **Only a tag push can publish to PyPI.** The release workflow's
+  `workflow_dispatch` trigger reaches the build job (a useful packaging dry
+  run) but the publish job is gated on `refs/tags/`. A dispatch carries no tag,
+  so the version-parity check cannot run against it — and a PyPI upload is
+  irreversible, since a version number burned by mistake can never be reused.
 
 ### Changed
 
