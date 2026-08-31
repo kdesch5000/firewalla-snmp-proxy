@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented here.
 
+## [2.3.0] - 2026-08-31
+
+Both ways of installing this now reach the same end state: a systemd unit that
+is enabled at boot, restarts on failure, and can be started and stopped by hand.
+
+**Why:** `pipx install` put a CLI on your PATH and nothing else. Becoming a
+service required cloning the repo for a shell script, so the packaged install
+and the cloned install produced different results — and, being two separate
+implementations, were free to drift apart. 2.2.3 had just fixed a case where
+they had.
+
+### Added
+
+- **`firewalla-snmp-proxy install-service`** and **`uninstall-service`**. No
+  clone needed. `install-service` creates the system user, the config and state
+  directories, a 0640 root-owned `EnvironmentFile` for the token, copies the
+  vendor MIB to `/usr/share/snmp/mibs`, writes the unit, and runs
+  `systemctl enable` so it survives a reboot. It starts the service when a
+  config and a non-empty token are already present, and otherwise prints what
+  is missing rather than leaving a unit that fails on start. `--no-start`,
+  `--user` and `--binary` are available; `uninstall-service --purge` also
+  removes `/etc/firewalla-snmp-proxy` and `/var/lib/firewalla-snmp-proxy`,
+  which it keeps by default because one holds your token and the other holds
+  the counter offsets.
+- 9 tests covering the ProtectHome refusal, binary search precedence, unit
+  rendering, MIB discovery under both layouts, and the readiness check that
+  decides whether to start (221 total).
+
+### Changed
+
+- **`install.sh` is now a shim** over `install-service`, down from ~240 lines
+  to 66. The documented `sudo ./install.sh --service` and `--uninstall` still
+  work; there is simply no second implementation behind them any more.
+- README gains an **Uninstall** section covering both the service and the
+  shell-only case, including the point that your MSP token stays valid after
+  the software is gone. The service section now states up front that the binary
+  must be system-wide and why.
+
 ## [2.2.3] - 2026-08-31
 
 ### Fixed

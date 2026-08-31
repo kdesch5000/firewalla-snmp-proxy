@@ -38,6 +38,7 @@ from .mibs import SwitchContext
 from .model import Switch
 from .msp_api import MspClient, MspError, MspRateLimited
 from .poller import Poller, rate_limit_delay
+from . import service
 
 log = logging.getLogger("firewalla_snmp_proxy")
 
@@ -724,6 +725,16 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 # -- entry point ---------------------------------------------------------
+def cmd_install_service(args: argparse.Namespace) -> int:
+    return service.install(
+        user=args.user, binary=args.binary, start=not args.no_start
+    )
+
+
+def cmd_uninstall_service(args: argparse.Namespace) -> int:
+    return service.uninstall(purge=args.purge)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="firewalla-snmp-proxy",
@@ -764,6 +775,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("-c", "--config")
     p_run.set_defaults(func=cmd_run)
 
+    p_svc = sub.add_parser(
+        "install-service",
+        help="install and enable the systemd unit (needs root)",
+    )
+    p_svc.add_argument(
+        "--user", default=service.SERVICE_NAME,
+        help="system user to run as (default: %(default)s)",
+    )
+    p_svc.add_argument(
+        "--binary", default=None,
+        help="path to the installed executable (default: autodetect)",
+    )
+    p_svc.add_argument(
+        "--no-start", action="store_true",
+        help="enable at boot but do not start now",
+    )
+    p_svc.set_defaults(func=cmd_install_service)
+
+    p_unsvc = sub.add_parser(
+        "uninstall-service",
+        help="stop, disable and remove the systemd unit (needs root)",
+    )
+    p_unsvc.add_argument(
+        "--purge", action="store_true",
+        help="also delete %s and %s" % (service.CONFIG_DIR, service.STATE_DIR),
+    )
+    p_unsvc.set_defaults(func=cmd_uninstall_service)
+
     return parser
 
 
@@ -773,7 +812,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     _setup_logging(args.verbose)
     try:
         return int(args.func(args))
-    except (ConfigError, MspError) as exc:
+    except (ConfigError, MspError, service.ServiceError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
     except KeyboardInterrupt:  # pragma: no cover

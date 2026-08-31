@@ -52,7 +52,7 @@ FORBIDDEN_SEGMENTS = frozenset(
 )
 
 DEFAULT_TIMEOUT = 20.0
-USER_AGENT = "firewalla-snmp-proxy/2.2 (+https://github.com/kdesch5000/firewalla-snmp-proxy)"
+USER_AGENT = "firewalla-snmp-proxy/2.3 (+https://github.com/kdesch5000/firewalla-snmp-proxy)"
 
 
 class MspError(RuntimeError):
