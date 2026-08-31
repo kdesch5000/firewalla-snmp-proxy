@@ -257,6 +257,61 @@ cmk -v --add-host fwswitch
 Set the SNMP port to 16100 in the host's properties (**SNMP** → **Port**), then
 run a service discovery. The `if64` check plugin picks up the ports.
 
+### Nagios
+
+> **Untested.** Everything below follows from the proxy being a plain SNMP v2c
+> agent, and the OIDs are verified to respond, but nobody has yet reported
+> running this under Nagios end to end. Reports welcome, working or not.
+
+Nagios is a different shape of tool from the others here — it alerts on
+thresholds rather than autodiscovering and graphing — so there are two things
+to set up.
+
+**1. The proxy's own health.** This is the part Nagios is genuinely good at,
+and it is more important than watching traffic: when the MSP API is
+unreachable the proxy keeps serving the last known good data, so counters
+freeze and every derived rate reads as a legitimate zero. Alert on these
+instead.
+
+```bash
+# Poll status: 1 ok, 2 stale, 3 never polled. Alert on anything but 1.
+check_snmp -H 127.0.0.1 -p 16100 -P 2c -C public \
+           -o .1.3.6.1.4.1.99999.1.3.0 -c 1:1 -l "proxy poll status"
+
+# Seconds since the last good poll: warn at 30 min, critical at 1 hour.
+check_snmp -H 127.0.0.1 -p 16100 -P 2c -C public \
+           -o .1.3.6.1.4.1.99999.1.2.0 -w 1800 -c 3600 -l "since poll"
+
+# ICMP reachability of the real switch: 1 up, 2 down, 3 unknown, 4 disabled.
+check_snmp -H 127.0.0.1 -p 16100 -P 2c -C public \
+           -o .1.3.6.1.4.1.99999.1.7.0 -c 1:1 -l "switch icmp"
+```
+
+**2. The ports.** Core Nagios has no autodiscovery, so define each port as a
+service, or generate the config. Per-port link state is a one-liner —
+`ifOperStatus` is `.1.3.6.1.2.1.2.2.1.8.<port>`, and the ifIndex is just the
+physical port number:
+
+```bash
+check_snmp -H 127.0.0.1 -p 16100 -P 2c -C public \
+           -o .1.3.6.1.2.1.2.2.1.8.3 -c 1:1 -l "Port 3 link"
+```
+
+For traffic, `check_snmp_int.pl` from the [manubulon](https://github.com/dnsmichi/manubulon-snmp)
+plugin set is the usual choice — it reads the 64-bit counters and does the rate
+calculation itself. Check its port flag against your version. Nagios XI users
+can point the **SNMP wizard** at the proxy and let it discover the interfaces.
+
+`check_snmp` emits perfdata, so PNP4Nagios or Grafana will graph any of the
+above without extra work.
+
+**Set the check interval with the poll interval in mind.** The proxy refreshes
+from the cloud every `poll_interval` seconds (default 900). Checking more often
+than that is harmless but returns the same numbers repeatedly — see
+[Rate limits](#rate-limits-and-why-poll_interval-defaults-to-15-minutes) for
+why the default is what it is. Counter ramping keeps rate-based checks smooth
+rather than producing a 0/0/0/spike sawtooth.
+
 ### PRTG
 
 Add an **SNMP Library** or **SNMP Traffic** sensor against the proxy host, and

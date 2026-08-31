@@ -11,6 +11,18 @@ All notable changes to this project are documented here.
   cloning is still worth it (`install.sh`, and the MIB as a loose file). Adds a
   PyPI version badge.
 
+### Added
+
+- **Nagios recipe** in the monitoring-system section, marked untested. Unlike
+  the other systems listed, Nagios alerts on thresholds rather than
+  autodiscovering, so the recipe leads with the proxy's own health OIDs —
+  `fwProxyPollStatus`, `fwProxySecondsSincePoll` and `fwProxyIcmpStatus` — as
+  `check_snmp` invocations, since a frozen counter reads as a legitimate zero
+  and traffic-based alerting cannot catch it. Per-port link state and pointers
+  to `check_snmp_int.pl` and the Nagios XI SNMP wizard follow, plus a note to
+  set the check interval against `poll_interval` rather than expecting
+  minute-resolution data.
+
 ## [2.2.1] - 2026-08-31
 
 Mostly project infrastructure and documentation, plus one Python 3.9 fix that
