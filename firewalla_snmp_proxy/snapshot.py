@@ -43,6 +43,11 @@ class TopologySnapshot:
     def __init__(self, path: Optional[str] = None) -> None:
         self.path = path
         self._data: Dict[str, Any] = {}
+        #: A write failure is almost always a static condition -- wrong owner
+        #: on the state directory, read-only mount -- so it would otherwise
+        #: repeat on every poll forever. Warn once, then stay quiet until it
+        #: starts working again.
+        self._warned = False
 
     # -- write -----------------------------------------------------------
     def save(
@@ -82,8 +87,14 @@ class TopologySnapshot:
                     pass
                 raise
             self._data = payload
+            self._warned = False
         except (OSError, TypeError, ValueError) as exc:
-            log.warning("could not persist topology cache to %s: %s", self.path, exc)
+            if not self._warned:
+                self._warned = True
+                log.warning(
+                    "could not persist topology cache to %s: %s "
+                    "(further failures will not be logged)", self.path, exc
+                )
 
     # -- read ------------------------------------------------------------
     def load(self) -> Optional[Dict[str, Any]]:

@@ -2,7 +2,26 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [2.2.2] - 2026-08-31
+
+### Fixed
+
+- **`init` hardcoded `/var/lib/firewalla-snmp-proxy` into the generated
+  config**, so the documented quick start — `pipx install`, then run as
+  yourself — produced `Permission denied` on every poll and silently discarded
+  both the counter offsets and the topology cache. The proxy looked like it was
+  working while quietly losing the state that keeps counters monotonic across a
+  restart and lets startup survive an API outage. Reported from a fresh install
+  on a second Raspberry Pi.
+
+  State paths are now resolved at run time: `/var/lib/firewalla-snmp-proxy`
+  when it is writable or when running as root (so a deployed service is
+  unchanged), otherwise `$XDG_STATE_HOME/firewalla-snmp-proxy`, normally
+  `~/.local/state/firewalla-snmp-proxy`. `init` writes whichever applies, and
+  keeps the cache beside the counters so `--state-file` moves both.
+- **Persistence failures now warn once instead of on every poll.** An
+  unwritable state directory is a static condition — wrong owner, read-only
+  mount — so the old behaviour was an unbounded log of the same line.
 
 ### Changed
 

@@ -273,3 +273,66 @@ def test_cached_startup_never_reaches_the_dark_probe_path(
     _, agents = asyncio.run(cli._startup(cfg, _Client(), snapshot=seeded_cache))
     assert not slept, "startup slept instead of serving cache"
     assert agents[MAC.upper()].ctx.serving_cache is True
+
+
+def test_topology_cache_write_failure_warns_only_once(tmp_path, caplog):
+    """A bad state directory is static, so it must not warn on every poll."""
+    import logging
+    from firewalla_snmp_proxy.snapshot import TopologySnapshot
+
+    unwritable = tmp_path / "nope"
+    unwritable.mkdir()
+    unwritable.chmod(0o500)  # r-x: cannot create the temp file inside
+    snap = TopologySnapshot(str(unwritable / "topology.json"))
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            snap.save("gid", {})
+
+    warnings = [r for r in caplog.records if "could not persist topology cache" in r.message]
+    assert len(warnings) == 1, "expected exactly one warning, got %d" % len(warnings)
+    unwritable.chmod(0o700)  # let pytest clean up
+
+
+def test_counter_store_write_failure_warns_only_once(tmp_path, caplog):
+    import logging
+    from firewalla_snmp_proxy.counters import CounterStore
+
+    unwritable = tmp_path / "nope2"
+    unwritable.mkdir()
+    unwritable.chmod(0o500)
+    store = CounterStore(str(unwritable / "counters.json"))
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            store.save(force=True)
+
+    warnings = [r for r in caplog.records if "could not persist counter state" in r.message]
+    assert len(warnings) == 1, "expected exactly one warning, got %d" % len(warnings)
+    unwritable.chmod(0o700)
+
+
+def test_default_state_dir_is_per_user_when_var_lib_is_not_writable(monkeypatch, tmp_path):
+    """Regression: init hardcoded /var/lib, so `pipx install` + run as yourself
+    warned on every poll and silently discarded counters and cache."""
+    from firewalla_snmp_proxy import config as cfgmod
+
+    monkeypatch.setattr(cfgmod.os, "access", lambda p, m: False)
+    monkeypatch.setattr(cfgmod.os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+
+    assert cfgmod.default_state_dir() == str(tmp_path / "firewalla-snmp-proxy")
+    assert cfgmod.default_state_file().endswith("firewalla-snmp-proxy/counters.json")
+    assert cfgmod.default_topology_cache().endswith("firewalla-snmp-proxy/topology.json")
+
+
+def test_default_state_dir_is_var_lib_for_root_and_for_a_writable_dir(monkeypatch):
+    from firewalla_snmp_proxy import config as cfgmod
+
+    monkeypatch.setattr(cfgmod.os, "access", lambda p, m: False)
+    monkeypatch.setattr(cfgmod.os, "geteuid", lambda: 0)
+    assert cfgmod.default_state_dir() == cfgmod.SERVICE_STATE_DIR
+
+    monkeypatch.setattr(cfgmod.os, "access", lambda p, m: True)
+    monkeypatch.setattr(cfgmod.os, "geteuid", lambda: 1000)
+    assert cfgmod.default_state_dir() == cfgmod.SERVICE_STATE_DIR

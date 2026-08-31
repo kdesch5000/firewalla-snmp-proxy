@@ -75,6 +75,8 @@ max_backoff_seconds: 3600
 # zero -- fwProxyServingCache and fwProxyIcmpStatus are what say so out loud.
 #
 # Set to "" to disable, in which case startup blocks until the API answers.
+# Path shown is what a deployed service uses. Running as an ordinary user,
+# `init` writes ~/.local/state/firewalla-snmp-proxy/ instead.
 topology_cache: "/var/lib/firewalla-snmp-proxy/topology.json"
 
 # Host to ping for live switch reachability, independent of the API.

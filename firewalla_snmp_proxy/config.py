@@ -34,8 +34,38 @@ DEFAULT_COMMUNITY = "public"
 #: 99999 is unassigned and will remain so for the foreseeable future -- there is
 #: no realistic collision risk. Change it here if you register your own.
 DEFAULT_ENTERPRISE_OID = "1.3.6.1.4.1.99999"
-DEFAULT_STATE_FILE = "/var/lib/firewalla-snmp-proxy/counters.json"
-DEFAULT_TOPOLOGY_CACHE = "/var/lib/firewalla-snmp-proxy/topology.json"
+#: Where a deployed service keeps its state. ``install.sh`` creates this owned
+#: by the service user.
+SERVICE_STATE_DIR = "/var/lib/firewalla-snmp-proxy"
+
+
+def default_state_dir() -> str:
+    """Directory for the counter offsets and the topology cache.
+
+    Resolved at call time rather than baked in at import, because the right
+    answer differs between the two supported ways of running this. A deployed
+    service owns ``/var/lib/firewalla-snmp-proxy`` and lands there. But the
+    documented quick start is ``pipx install`` followed by running as yourself,
+    and hardcoding the root-owned path made that emit a permission warning on
+    every poll while silently discarding both the counters and the cache -- the
+    proxy looked like it was working and was quietly losing state.
+    """
+    if os.access(SERVICE_STATE_DIR, os.W_OK):
+        return SERVICE_STATE_DIR
+    if os.geteuid() == 0:
+        return SERVICE_STATE_DIR  # does not exist yet, but root can create it
+    xdg = os.environ.get("XDG_STATE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "state"
+    )
+    return os.path.join(xdg, "firewalla-snmp-proxy")
+
+
+def default_state_file() -> str:
+    return os.path.join(default_state_dir(), "counters.json")
+
+
+def default_topology_cache() -> str:
+    return os.path.join(default_state_dir(), "topology.json")
 
 #: ICMP reachability defaults. The ping is free (it never touches the MSP API),
 #: so it runs far more often than the poll interval -- during a rate-limit
@@ -110,10 +140,10 @@ class Config:
     sys_object_id: Optional[str] = None
     sys_contact: str = ""
     sys_location: str = ""
-    state_file: str = DEFAULT_STATE_FILE
+    state_file: str = field(default_factory=default_state_file)
     #: Last-known-good API payload, so startup can serve without the API.
     #: Empty string disables caching (startup then blocks on the API).
-    topology_cache: str = DEFAULT_TOPOLOGY_CACHE
+    topology_cache: str = field(default_factory=default_topology_cache)
     #: Host to ping for live switch reachability. Empty disables the check and
     #: fwProxyIcmpStatus reports disabled(4). Prefer a hostname over a literal
     #: IP so a DHCP change does not silently start reporting a dead switch.
@@ -297,10 +327,10 @@ def load(path: Optional[str] = None) -> Config:
         ),
         sys_contact=str(data.get("sys_contact") or ""),
         sys_location=str(data.get("sys_location") or ""),
-        state_file=str(data.get("state_file") or DEFAULT_STATE_FILE),
+        state_file=str(data.get("state_file") or default_state_file()),
         topology_cache=(
             "" if data.get("topology_cache") in (False, "")
-            else str(data.get("topology_cache") or DEFAULT_TOPOLOGY_CACHE)
+            else str(data.get("topology_cache") or default_topology_cache())
         ),
         ping_host=str(data.get("ping_host") or "").strip(),
         ping_interval=int(data.get("ping_interval") or DEFAULT_PING_INTERVAL),

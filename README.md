@@ -652,6 +652,15 @@ switches:
     port: 16100
 ```
 
+**On `state_file` and `topology_cache`.** The paths above are what a deployed
+service uses, and are what `init` writes when it can write to
+`/var/lib/firewalla-snmp-proxy`. Run `init` as an ordinary user and it writes
+per-user paths instead (`$XDG_STATE_HOME/firewalla-snmp-proxy/`, normally
+`~/.local/state/firewalla-snmp-proxy/`), because the quick start does not
+create a root-owned state directory. Both files are just caches: losing them
+costs you monotonic counters across a restart and an API-free startup, not
+correctness. Set them explicitly if you want them somewhere else.
+
 ### Replacing an existing SNMP proxy
 
 If you already monitor the switch through some other proxy, your NMS keys its

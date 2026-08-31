@@ -27,6 +27,7 @@ from .config import (
     Config,
     ConfigError,
     SwitchConfig,
+    default_state_file,
     load,
 )
 from .counters import CounterStore
@@ -330,7 +331,7 @@ max_backoff_seconds: 3600
 # startup, agents are rebuilt from this so the NMS keeps seeing the device and
 # its full port set instead of the device going down. Counters are frozen, so
 # rates read zero -- fwProxyServingCache reports when this is in effect.
-topology_cache: "/var/lib/firewalla-snmp-proxy/topology.json"
+topology_cache: "%s"
 
 # Host to ping for live switch reachability, independent of the API -- the only
 # live signal during a rate-limit lockout. Prefer a hostname over a literal IP.
@@ -366,6 +367,9 @@ switches:
         domain,
         gid_line,
         TOKEN_ENV,
+        # Keep the cache beside the counters: one directory to create, chown or
+        # back up, and --state-file moves both together.
+        os.path.join(os.path.dirname(os.path.abspath(args.state_file)), "topology.json"),
         args.base_port,
         DEFAULT_ENTERPRISE_OID,
         args.state_file,
@@ -740,7 +744,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_init.add_argument("--base-port", type=int, default=16100)
     p_init.add_argument(
-        "--state-file", default="/var/lib/firewalla-snmp-proxy/counters.json"
+        "--state-file", default=default_state_file()
     )
     p_init.add_argument("--force", action="store_true", help="overwrite existing config")
     p_init.set_defaults(func=cmd_init)

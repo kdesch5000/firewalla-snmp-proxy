@@ -49,6 +49,9 @@ class CounterStore:
         self.path = path
         self._state: Dict[str, Dict[str, int]] = {}
         self._dirty = False
+        #: See TopologySnapshot: a write failure here is a static condition,
+        #: so warn once rather than on every save.
+        self._warned = False
         if path:
             self.load()
 
@@ -94,8 +97,14 @@ class CounterStore:
                         pass
                 raise
             self._dirty = False
+            self._warned = False
         except OSError as exc:
-            log.warning("could not persist counter state to %s: %s", self.path, exc)
+            if not self._warned:
+                self._warned = True
+                log.warning(
+                    "could not persist counter state to %s: %s "
+                    "(further failures will not be logged)", self.path, exc
+                )
 
     # -- core ------------------------------------------------------------
     @staticmethod
