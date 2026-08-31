@@ -42,39 +42,28 @@ read-only** — see [Safety](#safety).
 - Only two Python dependencies (`pysnmp`, `PyYAML`) — both pulled in
   automatically below.
 
-## Quick start
+## Install
 
-```bash
-# 1. Install
-pipx install firewalla-snmp-proxy        # or: pip install firewalla-snmp-proxy
+There are two ways to get it, and they end in the same place. Both give you a
+`firewalla-snmp-proxy` command; everything after this section is identical
+whichever you pick.
 
-firewalla-snmp-proxy --version
-
-# 2. Get an API token from the Firewalla MSP web console
-#    (account settings -> API tokens), then:
-export FIREWALLA_MSP_TOKEN=<your token>
-
-# 3. Discover your switches and write a config
-firewalla-snmp-proxy init --domain dn-abc123.firewalla.net
-
-# 4. Check it works
-firewalla-snmp-proxy check -c config.yaml
-
-# 5. Run it
-firewalla-snmp-proxy run -c config.yaml
-```
-
-`pipx` is suggested first because current distros are
-[PEP 668](https://peps.python.org/pep-0668/)-managed and will refuse a bare
-`pip install` into system Python. To install it system-wide so a systemd unit
-can find the binary:
+### Option A — from PyPI
 
 ```bash
 sudo apt install pipx
 sudo pipx --global install firewalla-snmp-proxy
+
+firewalla-snmp-proxy --version
 ```
 
-A plain venv works just as well if you prefer to manage it yourself:
+Use `--global`. It puts the binary in `/usr/local/bin`, which is what the
+systemd unit needs — a per-user `pipx install` lands in `~/.local/bin`, and the
+service sandbox sets `ProtectHome=yes` and cannot execute anything under
+`/home` or `/root`. Plain `pip install` into system Python is refused by most
+current distros ([PEP 668](https://peps.python.org/pep-0668/)).
+
+A hand-managed venv is equally fine if you prefer one:
 
 ```bash
 sudo python3 -m venv /opt/firewalla-snmp-proxy-venv
@@ -82,11 +71,49 @@ sudo /opt/firewalla-snmp-proxy-venv/bin/pip install firewalla-snmp-proxy
 sudo ln -sf /opt/firewalla-snmp-proxy-venv/bin/firewalla-snmp-proxy /usr/local/bin/
 ```
 
-Step 4 binds no sockets, so it is safe to run while something else is already
-listening on the port. Step 5 runs in the foreground, which is what you want
-while trying it out — for anything permanent see
-[Install as a service](#install-as-a-service), which restarts on failure and
-survives a reboot.
+### Option B — from a clone
+
+For reading the source, running the tests, or contributing:
+
+```bash
+git clone https://github.com/kdesch5000/firewalla-snmp-proxy
+cd firewalla-snmp-proxy
+
+sudo pipx --global install .      # or: python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+```
+
+The clone also carries `install.sh`, which is a shim over
+`firewalla-snmp-proxy install-service` — kept so the command documented in
+earlier releases still works. There is no separate implementation behind it,
+so a clone install and a PyPI install cannot drift apart.
+
+**You do not need a clone to run this or to install the service.** The PyPI
+package carries the vendor MIB and the service installer too.
+
+---
+
+## Quick start
+
+This runs it in the foreground to prove it works. Make it permanent in the next
+section.
+
+```bash
+# 1. Get an API token from the Firewalla MSP web console
+#    (account settings -> API tokens), then:
+export FIREWALLA_MSP_TOKEN=<your token>
+
+# 2. Discover your switches and write a config
+firewalla-snmp-proxy init --domain dn-abc123.firewalla.net
+
+# 3. Check it works
+firewalla-snmp-proxy check -c config.yaml
+
+# 4. Run it
+firewalla-snmp-proxy run -c config.yaml
+```
+
+Step 3 binds no sockets, so it is safe to run while something else is already
+listening on the port.
 
 Then, from anywhere that can reach the proxy:
 
@@ -102,34 +129,29 @@ which accepts local traffic only. See
 [Monitoring system recipes](#monitoring-system-recipes) if your NMS is on
 another host.
 
-### Install as a service
+Ctrl-C stops it. Nothing was installed system-wide and no service was created;
+run in the foreground dies with your shell.
 
-You almost certainly want this. `run` in a shell dies with your session and
-does not come back after a reboot, and a monitoring source that quietly stops
-is worse than one that was never there.
+---
 
-**The binary must be installed system-wide.** The unit sets `ProtectHome=yes`,
-so systemd cannot execute anything under `/home` or `/root` — a per-user `pipx
-install` produces a binary the service is unable to start, even though it runs
-fine from your shell. The installer refuses that case rather than writing a
-unit that cannot work.
+## Run it as a service
+
+You almost certainly want this. A monitoring source that quietly stops after a
+reboot is worse than one that was never there.
 
 ```bash
-pipx uninstall firewalla-snmp-proxy        # if you installed it as yourself
-sudo pipx --global install firewalla-snmp-proxy
-
-sudo firewalla-snmp-proxy install-service  # or: --user snmpproxy
+sudo firewalla-snmp-proxy install-service      # or: sudo ./install.sh --service
 ```
 
-No clone required. From a checkout, `sudo ./install.sh --service` does the same
-thing — it is a shim over the same code, so both routes land in exactly the
-same state.
+That is the whole thing, from either install option. It:
 
-The unit is **generated** from the detected binary path, service user and
-config location, so there is nothing to hand-edit. It creates a locked-down
-`firewalla-snmp-proxy` system user, a 0640 root-owned environment file for your
-token, a state directory, and installs the vendor MIB to
-`/usr/share/snmp/mibs`:
+- creates a locked-down `firewalla-snmp-proxy` system user (`--user` to change it)
+- creates the config and state directories
+- writes a 0640 root-owned `EnvironmentFile` for your token
+- copies the vendor MIB to `/usr/share/snmp/mibs`
+- generates the unit from the detected binary path — nothing to hand-edit
+- runs `systemctl enable`, so **it comes back after a reboot**
+- starts it, if a config and a non-empty token are already in place
 
 | | |
 |---|---|
@@ -138,15 +160,10 @@ token, a state directory, and installs the vendor MIB to
 | Counter state and cache | `/var/lib/firewalla-snmp-proxy/` |
 | Unit | `/etc/systemd/system/firewalla-snmp-proxy.service` |
 
-`install-service` always runs `systemctl enable`, so it comes back after a
-reboot. It starts it immediately if a config and a non-empty token are already
-in place; otherwise it prints what is still missing and leaves it stopped. Pass
-`--no-start` to enable without starting either way.
-
-If you are setting up from scratch, finish it off with:
+If it reports that it did not start, you still need a token and a config:
 
 ```bash
-sudoedit /etc/firewalla-snmp-proxy/env       # FIREWALLA_MSP_TOKEN=<token>
+sudoedit /etc/firewalla-snmp-proxy/env         # FIREWALLA_MSP_TOKEN=<token>
 
 export FIREWALLA_MSP_TOKEN=<token>
 sudo firewalla-snmp-proxy init --domain <your>.firewalla.net \
@@ -154,64 +171,116 @@ sudo firewalla-snmp-proxy init --domain <your>.firewalla.net \
 firewalla-snmp-proxy check -c /etc/firewalla-snmp-proxy/config.yaml
 
 sudo systemctl start firewalla-snmp-proxy
-journalctl -u firewalla-snmp-proxy -f
 ```
 
-Ordinary systemd verbs work from then on: `systemctl status|stop|start|restart
-firewalla-snmp-proxy`. `Restart=on-failure` with `RestartSec=15s` handles
-crashes, and a manual `stop` stays stopped.
+Pass `--no-start` if you want it enabled at boot but left stopped for now.
 
-### Uninstall
+### Managing it
+
+Ordinary systemd verbs, nothing special:
 
 ```bash
-sudo firewalla-snmp-proxy uninstall-service   # or: sudo ./install.sh --uninstall
+sudo systemctl status    firewalla-snmp-proxy    # running? since when?
+sudo systemctl stop      firewalla-snmp-proxy    # stays stopped
+sudo systemctl start     firewalla-snmp-proxy
+sudo systemctl restart   firewalla-snmp-proxy    # after a config change
+sudo systemctl disable   firewalla-snmp-proxy    # stop coming back at boot
+sudo systemctl enable    firewalla-snmp-proxy
+
+journalctl -u firewalla-snmp-proxy -f            # follow the log
+journalctl -u firewalla-snmp-proxy -n 100        # last 100 lines
 ```
 
-That stops the service, disables it, removes the unit and reloads systemd. It
-**keeps** `/etc/firewalla-snmp-proxy` and `/var/lib/firewalla-snmp-proxy` on
-purpose: the first holds your token, and discarding the counter offsets causes
-one spurious spike in your graphs if you ever reinstall. Add `--purge` to
-delete both.
+The unit sets `Restart=on-failure` with `RestartSec=15s`, so a crash is
+recovered automatically while a deliberate `stop` stays stopped.
 
-Then remove the program itself:
+There is no reload signal — the config is read once at startup, so
+`systemctl restart` is how you apply a change. Restarting is cheap and
+counters survive it, but avoid restarting during a rate-limit lockout: it
+re-requests and collects a fresh `Retry-After`, pushing recovery out further.
+
+### Upgrading
+
+**Is there a newer version?** Compare what you have against PyPI:
 
 ```bash
-sudo pipx --global uninstall firewalla-snmp-proxy
+firewalla-snmp-proxy --version                        # what you are running
+
+curl -s https://pypi.org/pypi/firewalla-snmp-proxy/json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])'
 ```
 
-If you only ever ran it in a shell, there is no service to remove — just
-`pipx uninstall firewalla-snmp-proxy`, delete your `config.yaml`, and
-`rm -rf ~/.local/state/firewalla-snmp-proxy`.
+Or let pip tell you, without installing anything:
 
-Either way, your MSP API token stays valid after the software is gone. Delete
-it in the MSP console if you are done with it.
+```bash
+pip index versions firewalla-snmp-proxy               # pip 21.2+
+```
 
-The token is never accepted as a command-line argument, so it cannot leak into
-your shell history or `ps` output. It is resolved from `FIREWALLA_MSP_TOKEN`,
-then `token_file`, then the config file — with a warning if the file holding it
-is group- or world-readable.
+To be told rather than having to look: on
+[the GitHub repo](https://github.com/kdesch5000/firewalla-snmp-proxy), use
+**Watch → Custom → Releases**. Every release has a changelog entry saying
+whether it matters to you — most are small, and the ones that are not say so.
+
+**Doing the upgrade:**
+
+```bash
+sudo pipx --global upgrade firewalla-snmp-proxy
+sudo systemctl restart firewalla-snmp-proxy
+```
+
+Add `sudo firewalla-snmp-proxy install-service` afterwards if a release note
+mentions a unit change. It is idempotent and keeps an existing config and token
+untouched, so running it when you did not need to costs nothing.
+
+Confirm what is actually running — the proxy reports its own version in
+`sysDescr`, so your NMS shows it too:
+
+```bash
+snmpget -v2c -c <community> 127.0.0.1:16100 .1.3.6.1.2.1.1.1.0
+```
+
+One gotcha: PyPI's package index is served through a CDN that lags the release
+by a few minutes, so an upgrade immediately after a release can quietly install
+the previous version. If `--version` disagrees with what you expected, force it:
+
+```bash
+sudo pipx --global install --force firewalla-snmp-proxy==<version>
+```
+
+Check the proxy is healthy rather than guessing from traffic graphs; see
+[Monitoring the proxy itself](#monitoring-the-proxy-itself).
 
 ---
 
-### Installing from a clone instead
-
-The PyPI package is self-contained: it runs the proxy, installs the service,
-and carries the vendor MIB. You do not need a clone for any of that.
-
-Clone it if you want to read the source, run the tests, or contribute:
+## Uninstall
 
 ```bash
-git clone https://github.com/kdesch5000/firewalla-snmp-proxy
-cd firewalla-snmp-proxy
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest
+sudo firewalla-snmp-proxy uninstall-service     # or: sudo ./install.sh --uninstall
 ```
 
-`install.sh` in the checkout is a shim over `firewalla-snmp-proxy
-install-service`, kept so the documented command from earlier releases still
-works. The MIB ships inside the wheel at `mibs/FIREWALLA-SNMP-PROXY-MIB.txt`
-under site-packages, and `install-service` copies it to
-`/usr/share/snmp/mibs` for you.
+Stops the service, disables it, removes the unit, reloads systemd. It **keeps**
+`/etc/firewalla-snmp-proxy` and `/var/lib/firewalla-snmp-proxy` on purpose: the
+first holds your token, and discarding the counter offsets causes one spurious
+spike in your graphs if you ever reinstall.
+
+```bash
+sudo firewalla-snmp-proxy uninstall-service --purge   # delete those two as well
+sudo pipx --global uninstall firewalla-snmp-proxy     # remove the program
+```
+
+**If you never installed the service** and only ran it in a shell, there is no
+unit to remove:
+
+```bash
+pipx uninstall firewalla-snmp-proxy
+rm config.yaml
+rm -rf ~/.local/state/firewalla-snmp-proxy
+```
+
+Either way, **your MSP API token stays valid after the software is gone.**
+Delete it in the MSP console if you are done with it.
+
+---
 
 ## What you get
 

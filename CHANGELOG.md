@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Changed
+
+Documentation only. The install docs had grown by accretion — three install
+variants scattered across two sections, service management as a single
+sentence, and no answer at all to "how do I know there is a newer version?"
+
+- **`## Install` is now one section with two clearly-labelled options**, PyPI
+  and clone, stating up front that both end in the same place and that a clone
+  is not needed to run the proxy or install the service. Why `--global`
+  matters (`ProtectHome=yes`) is explained where you choose, not later.
+- **Quick start is explicitly the foreground, try-it-out path**, and says so,
+  ending with the fact that it dies with your shell.
+- **`### Managing it`** — status, stop, start, restart, enable, disable and
+  both journalctl forms, plus the fact that there is no reload signal and the
+  warning not to restart during a rate-limit lockout.
+- **`### Upgrading`** — how to check whether a newer version exists (PyPI JSON,
+  `pip index versions`, GitHub release watching), how to apply it, how to
+  confirm what is running via `sysDescr`, and the PyPI CDN lag that can quietly
+  install the previous version right after a release.
+- `## Uninstall` promoted to a top-level section covering the service, the
+  `--purge` case, the never-installed-a-service case, and the reminder that
+  the MSP token stays valid after the software is gone.
+
 ## [2.3.0] - 2026-08-31
 
 Both ways of installing this now reach the same end state: a systemd unit that
