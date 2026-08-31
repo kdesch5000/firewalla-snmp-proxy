@@ -1,6 +1,7 @@
 # firewalla-snmp-proxy
 
 [![CI](https://github.com/kdesch5000/firewalla-snmp-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/kdesch5000/firewalla-snmp-proxy/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/firewalla-snmp-proxy)](https://pypi.org/project/firewalla-snmp-proxy/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -43,17 +44,9 @@ read-only** — see [Safety](#safety).
 
 ## Quick start
 
-Not on PyPI yet, so install from a clone. Cloning is worth it anyway: you get
-`install.sh` for the systemd setup and the vendor MIB to load into your NMS.
-
 ```bash
 # 1. Install
-git clone https://github.com/kdesch5000/firewalla-snmp-proxy
-cd firewalla-snmp-proxy
-
-sudo python3 -m venv /opt/firewalla-snmp-proxy-venv
-sudo /opt/firewalla-snmp-proxy-venv/bin/pip install .
-sudo ln -sf /opt/firewalla-snmp-proxy-venv/bin/firewalla-snmp-proxy /usr/local/bin/
+pipx install firewalla-snmp-proxy        # or: pip install firewalla-snmp-proxy
 
 firewalla-snmp-proxy --version
 
@@ -71,14 +64,22 @@ firewalla-snmp-proxy check -c config.yaml
 firewalla-snmp-proxy run -c config.yaml
 ```
 
-A venv rather than a bare `pip install` because current distros are
-[PEP 668](https://peps.python.org/pep-0668/)-managed and will refuse to install
-into system Python. If you would rather not manage one, `pipx` reads straight
-from the repo:
+`pipx` is suggested first because current distros are
+[PEP 668](https://peps.python.org/pep-0668/)-managed and will refuse a bare
+`pip install` into system Python. To install it system-wide so a systemd unit
+can find the binary:
 
 ```bash
 sudo apt install pipx
-sudo pipx --global install git+https://github.com/kdesch5000/firewalla-snmp-proxy
+sudo pipx --global install firewalla-snmp-proxy
+```
+
+A plain venv works just as well if you prefer to manage it yourself:
+
+```bash
+sudo python3 -m venv /opt/firewalla-snmp-proxy-venv
+sudo /opt/firewalla-snmp-proxy-venv/bin/pip install firewalla-snmp-proxy
+sudo ln -sf /opt/firewalla-snmp-proxy-venv/bin/firewalla-snmp-proxy /usr/local/bin/
 ```
 
 Step 4 binds no sockets, so it is safe to run while something else is already
@@ -138,6 +139,21 @@ then `token_file`, then the config file — with a warning if the file holding i
 is group- or world-readable.
 
 ---
+
+### Installing from a clone instead
+
+The PyPI package is everything you need to *run* the proxy. Clone the repo as
+well if you want `install.sh` (which writes the systemd unit, service user and
+sandbox for you) or the vendor MIB as a file to load into your NMS:
+
+```bash
+git clone https://github.com/kdesch5000/firewalla-snmp-proxy
+cd firewalla-snmp-proxy
+sudo ./install.sh --service
+```
+
+The MIB also ships inside the wheel, at `mibs/FIREWALLA-SNMP-PROXY-MIB.txt`
+under your site-packages directory.
 
 ## What you get
 

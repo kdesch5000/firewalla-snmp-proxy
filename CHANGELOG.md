@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- README install instructions now use the PyPI package (`pipx install
+  firewalla-snmp-proxy`) rather than a git URL, with a separate note on when
+  cloning is still worth it (`install.sh`, and the MIB as a loose file). Adds a
+  PyPI version badge.
+
 ## [2.2.1] - 2026-08-31
 
 Mostly project infrastructure and documentation, plus one Python 3.9 fix that
