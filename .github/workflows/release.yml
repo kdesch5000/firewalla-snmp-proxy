@@ -31,6 +31,7 @@ jobs:
           python -m twine check dist/*
 
       - name: Fail if the tag does not match the packaged version
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg="$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
