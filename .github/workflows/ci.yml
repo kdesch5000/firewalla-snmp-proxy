@@ -21,9 +21,9 @@ jobs:
         # job, or the metadata starts lying to people installing from PyPI.
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -39,9 +39,9 @@ jobs:
     name: Build sdist and wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -58,7 +58,7 @@ jobs:
           tar tzf dist/*.tar.gz | grep -q 'mibs/FIREWALLA-SNMP-PROXY-MIB.txt'
           python -m zipfile -l dist/*.whl | grep -q 'mibs/FIREWALLA-SNMP-PROXY-MIB.txt'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: dist
           path: dist/
