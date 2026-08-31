@@ -2,11 +2,11 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [2.3.1] - 2026-08-31
 
 ### Changed
 
-Documentation only. The install docs had grown by accretion — three install
+Documentation only, released so the PyPI project page carries it. The install docs had grown by accretion — three install
 variants scattered across two sections, service management as a single
 sentence, and no answer at all to "how do I know there is a newer version?"
 
