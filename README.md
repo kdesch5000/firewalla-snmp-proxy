@@ -1,5 +1,9 @@
 # firewalla-snmp-proxy
 
+[![CI](https://github.com/kdesch5000/firewalla-snmp-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/kdesch5000/firewalla-snmp-proxy/actions/workflows/ci.yml)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Monitor your Firewalla Switch with any SNMP monitoring system.**
 
 The Firewalla Switch SE has no SNMP agent, so tools like Observium, LibreNMS,
@@ -29,6 +33,11 @@ read-only** — see [Safety](#safety).
 - A Linux host with **Python 3.9+**, reachable by your monitoring system.
 - A **Firewalla MSP** account. The per-port data comes from the MSP cloud API,
   so a standalone box with no MSP subscription has nothing to read.
+
+  **This does not have to cost anything.** Firewalla offers *MSP Lite* free for
+  a single box, which is all this proxy needs — one box, one API token. Sign up
+  at [firewalla.net](https://firewalla.net) and you get an MSP domain of the
+  form `dn-abc123.firewalla.net`, which is what `--domain` below wants.
 - Only two Python dependencies (`pysnmp`, `PyYAML`) — both pulled in
   automatically below.
 
@@ -391,6 +400,56 @@ While backed off, `fwProxyLastError` says so explicitly and
 `fwProxySecondsSincePoll` keeps climbing — **alert on those**, not on traffic
 rates, which cannot distinguish a rate limit from a quiet switch.
 
+#### What is actually known about the quota
+
+Firewalla publishes no rate limit anywhere. As of 2026-08-31 the
+`docs.firewalla.net` sitemap is 18 pages, all `api-reference/*` and
+`data-models/*`, with no limits, quota or errors page at all; the
+`msp-api-examples` repo says nothing either. The closest thing to an official
+statement is a Firewalla staff reply in an MSP pricing thread noting there "may
+be some restrictions on rate limiting the API calls that Firewalla is still
+testing" — so the limit is both **undocumented and evolving**. Treat every
+number below as observed behaviour, not a specification.
+
+**Measured, from a real lockout:**
+
+| Observation | Value |
+|---|---|
+| Call volume that tripped it | ~4,300/day (60s interval x ~3 calls) |
+| How long the lockout lasted | **6+ hours** |
+| `Retry-After` sent on every 429 | `3600` — and the lockout outlasted it by 5+ hours |
+| Rate-limit headers on a **successful** response | **none** |
+
+That last row is the important one for anyone else building against this API.
+A successful `GET /v2/boxes` returns only `Content-Type`, `Content-Length`,
+`Connection`, `Date`, `vary`, `X-Amzn-Trace-Id`, `x-amzn-RequestId`,
+`x-amzn-Remapped-content-length`, `x-powered-by`, and CloudFront's `X-Cache` /
+`Via` / `X-Amz-Cf-*`. There is no `x-ratelimit-*`, no `ratelimit-*`, no quota
+counter of any kind. **A client cannot read its remaining headroom — the limit
+is only discoverable by tripping it.** Don't waste time looking for those
+headers.
+
+**Inferred, from the serving stack:** those `x-amzn-*` headers plus
+`x-powered-by: Express` mean the API is served by CloudFront in front of AWS
+API Gateway. API Gateway usage plans have exactly two knobs — throttle
+(requests/second plus burst) and quota — and quota granularity is **DAY, WEEK
+or MONTH only; there is no hourly option**. That independently explains the
+contradiction above: `Retry-After: 3600` is a generic canned hint, while the
+real reset is a day or week boundary. API Gateway also emits no rate-limit
+headers by default, matching the measurement. This is inference from the
+infrastructure, not confirmation from Firewalla, but it fits every observation.
+
+The practical consequences, which the defaults already encode:
+
+- **Assume a daily quota.** At `poll_interval: 900` the proxy spends roughly
+  290 calls a day, about 7% of what tripped the limit.
+- **Never restart to retry sooner.** A restart re-issues a request, collects a
+  fresh `Retry-After: 3600`, and pushes recovery out another hour.
+- **Don't trust `Retry-After` as a reset time.** The proxy honours it because
+  the server is the only party that might know, but `dark_probe_max_seconds`
+  exists precisely so a canned 3600 cannot strand a cacheless proxy for an hour
+  after the quota already cleared.
+
 ### Surviving an API outage without going down
 
 Backing off politely is not enough on its own, because the SNMP sockets are
@@ -633,6 +692,13 @@ The Firewalla reset its counters and `state_file` wasn't writable, so offsets
 couldn't persist. Check permissions on the state directory.
 
 ---
+
+## Contributing
+
+Bug reports and reports of other Firewalla switch models are the most useful
+things you can bring — see [CONTRIBUTING.md](CONTRIBUTING.md) for what to
+include and how to sanitize it first. Security issues should go through
+[SECURITY.md](SECURITY.md), privately, not as a public issue.
 
 ## Development
 

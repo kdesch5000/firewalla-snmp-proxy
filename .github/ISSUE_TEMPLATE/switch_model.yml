@@ -1,0 +1,43 @@
+name: Switch model report
+description: Report whether a Firewalla switch model other than the SE works
+labels: ["model-coverage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The proxy is written against the Firewalla Switch SE. Other models pull
+        from the same MSP `/topology` payload, but fields vary. Reports either
+        way are useful.
+
+  - type: input
+    id: model
+    attributes:
+      label: Switch model and firmware
+      placeholder: "Firewalla Switch (fwsw-A), firmware 1.x"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: works
+    attributes:
+      label: Does it work?
+      options:
+        - "Yes, fully"
+        - "Partly — some data missing or wrong"
+        - "No, it fails to start"
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: What is missing or wrong?
+
+  - type: textarea
+    id: payload
+    attributes:
+      label: Sanitized /topology payload (optional but very helpful)
+      description: |
+        Replace MACs with the `20:6D:31:00:00:0X` pattern, remove serials and
+        IPs, keep the structure. This can become a test fixture.
+      render: json

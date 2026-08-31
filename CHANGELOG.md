@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+Project infrastructure and documentation only — no behaviour change.
+
+### Added
+
+- **CI** (`.github/workflows/ci.yml`) — pytest on Python 3.9 through 3.13, plus
+  a build job that runs `twine check` and asserts the vendor MIB is present in
+  *both* the sdist and the wheel. The 3.9 job exists to keep
+  `requires-python = ">=3.9"` honest rather than aspirational.
+- **Release workflow** (`.github/workflows/release.yml`) — publishes to PyPI on
+  a `v*` tag via Trusted Publishing (OIDC), so no API token is stored in the
+  repository. Refuses to publish when the tag and the packaged version disagree.
+- `SECURITY.md` — private reporting channel, and an explicit account of what
+  the software has access to: an MSP token that can read the whole network
+  inventory, and an SNMP listener speaking a cleartext protocol.
+- `CONTRIBUTING.md` — what to include in a bug report, how to sanitize it, and
+  how to contribute a fixture for a switch model other than the SE.
+- Issue templates for bugs, features and switch-model reports, plus a contact
+  link routing security reports to a private advisory.
+
+### Changed
+
+- **README documents what is actually known about the MSP API quota.** New
+  "What is actually known about the quota" subsection: the limit is
+  undocumented and evolving; ~4,300 calls/day tripped it; the lockout ran 6+
+  hours against a `Retry-After: 3600`; and — measured 2026-08-31 — successful
+  responses carry **no** `x-ratelimit-*` headers of any kind, so a client
+  cannot read its remaining headroom. Also records the inference from the
+  `x-amzn-*` / CloudFront headers that the API is fronted by AWS API Gateway,
+  whose usage-plan quotas are DAY/WEEK/MONTH only — which explains why a canned
+  hourly `Retry-After` coexists with a multi-hour lockout.
+- README Requirements now says **MSP Lite is free for a single box**. The
+  previous wording read as though a paid subscription were required, which is
+  the most likely reason for someone to stop reading.
+- README gains CI/Python/licence badges and a Contributing section.
+
 ## [2.2.0] - 2026-08-28
 
 The API being unavailable no longer takes the device down.

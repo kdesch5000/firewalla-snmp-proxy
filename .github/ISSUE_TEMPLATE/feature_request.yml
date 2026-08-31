@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a capability or additional data to publish
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Note that this project is **strictly read-only** — requests to control
+        the switch (reboot, power-cycle a port, reset stats) are out of scope
+        by design. See [SECURITY.md](../blob/main/SECURITY.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: What are you trying to see or do that you cannot today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would it look like?
+      description: If it is new data, say which MIB/OID would be the natural home.
+
+  - type: input
+    id: nms
+    attributes:
+      label: Which monitoring system are you using?

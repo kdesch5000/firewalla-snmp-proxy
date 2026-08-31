@@ -1,0 +1,64 @@
+name: Bug report
+description: Something the proxy does wrong, or data your NMS shows incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste your MSP API token.** Output below can contain your switch
+        MAC, serial, IP and MSP domain — scrub what you are not comfortable
+        making public.
+
+  - type: input
+    id: version
+    attributes:
+      label: Proxy version
+      description: "`firewalla-snmp-proxy --version`"
+      placeholder: "2.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: switch
+    attributes:
+      label: Switch model
+      description: e.g. Firewalla Switch SE (fwsw-B). Include firmware if known.
+    validations:
+      required: true
+
+  - type: input
+    id: nms
+    attributes:
+      label: Monitoring system
+      placeholder: "Observium CE 24.x / LibreNMS / Zabbix 7 / ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of `firewalla-snmp-proxy check -c <config>`
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: health
+    attributes:
+      label: Proxy health subtree
+      description: "`snmpwalk -v2c -c <community> 127.0.0.1:<port> 1.3.6.1.4.1.99999`"
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: "`journalctl -u firewalla-snmp-proxy -n 100`"
+      render: text
