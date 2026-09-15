@@ -351,11 +351,74 @@ cd /opt/observium
 ./poller.php -h fwswitch
 ```
 
-For named vendor objects, copy the MIB in and rediscover:
+That autodiscovers the ports and graphs their traffic. For named vendor objects
+in the UI, copy the MIB in and rediscover:
 
 ```bash
 cp mibs/FIREWALLA-SNMP-PROXY-MIB.txt /opt/observium/mibs/rfc/
 ```
+
+#### Observium cannot see the switch go down until you bind the ICMP object
+
+This part is not optional, and it is easy to miss because nothing looks broken.
+
+Observium's own up/down for this device is **structurally blind to the real
+switch**. The device's address is `127.0.0.1` and its SNMP is answered by the
+proxy running on the Observium host, so both the ping and the SNMP query keep
+succeeding for exactly as long as the *proxy* lives — whatever has happened to
+the switch. Only the proxy dying marks the device down.
+
+The real verdict lives in `fwProxyIcmpStatus` (`.1.3.6.1.4.1.99999.1.7.0`),
+refreshed by the proxy's own ping loop. Copying the MIB in does **not** make
+Observium poll it — a MIB gives names, not monitoring. Until you bind it,
+the proxy detects the switch being unreachable and Observium silently discards
+the result.
+
+Observium CE has a purpose-built hook for this. Add to `/opt/observium/config.php`:
+
+```php
+// up(1) down(2) unknown(3) disabled(4). unknown is the startup/transient state
+// before ping_fail_threshold is met, so it must NOT be 'alert' or every proxy
+// restart raises a false alarm. Tri-state: unknown is not down.
+$config['mibs']['STATIC']['states']['fwProxyIcmpStatus'] = [
+    1 => ['name' => 'up',       'event' => 'ok'],
+    2 => ['name' => 'down',     'event' => 'alert'],
+    3 => ['name' => 'unknown',  'event' => 'warning'],
+    4 => ['name' => 'disabled', 'event' => 'ignore'],
+];
+
+$config['status']['static'][] = [
+    'device_id' => <device_id>,   // the proxy device in Observium
+    'oid'       => '.1.3.6.1.4.1.99999.1.7.0',
+    'type'      => 'fwProxyIcmpStatus',
+    'descr'     => 'Switch ICMP reachability',
+];
+```
+
+Use `$config['status']['static']` rather than inserting a row into the `sensors`
+or `status` table by hand. Discovery *claims* entities created this way; a bare
+row is not claimed, and `check_valid_status` soft-deletes it on the next
+discovery run. The data keeps updating while the UI stops showing it, which is a
+miserable thing to debug.
+
+Then rediscover and poll — a **full** discovery, not `-m alerts`, or the alert
+checker never binds to the entity:
+
+```bash
+cd /opt/observium
+./discovery.php -h fwswitch     # prints: Static Status +
+./poller.php -h fwswitch
+```
+
+Add an alert checker against the new entity with **entity type `status`** and
+condition `status_event` equals `alert`. Because the state map above assigns
+`alert` only to `down(2)`, the checker cannot fire on `unknown` or `disabled`.
+Leave the check delay at `0`: `alert_tests.delay` counts **poll cycles, not
+seconds**, and the proxy already debounces with `ping_fail_threshold`.
+
+`fwProxyPollStatus` (`.1.3.6.1.4.1.99999.1.3.0`, ok(1)/stale(2)/error(3)) is
+worth binding the same way — it is the object that tells you the API has gone
+away and the counters you are looking at are frozen.
 
 ### LibreNMS
 
@@ -410,8 +473,11 @@ check_snmp -H 127.0.0.1 -p 16100 -P 2c -C public \
            -o .1.3.6.1.4.1.99999.1.2.0 -w 1800 -c 3600 -l "since poll"
 
 # ICMP reachability of the real switch: 1 up, 2 down, 3 unknown, 4 disabled.
+# @2:2 alerts only INSIDE the range, i.e. only on down(2). Do not use -c 1:1
+# here: that also goes critical on unknown(3), the transient startup state, and
+# on disabled(4) when no ping_host is configured.
 check_snmp -H 127.0.0.1 -p 16100 -P 2c -C public \
-           -o .1.3.6.1.4.1.99999.1.7.0 -c 1:1 -l "switch icmp"
+           -o .1.3.6.1.4.1.99999.1.7.0 -c @2:2 -l "switch icmp"
 ```
 
 **2. The ports.** Core Nagios has no autodiscovery, so define each port as a

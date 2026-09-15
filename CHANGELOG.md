@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented here.
 
+## [2.3.2] - 2026-09-15
+
+### Changed
+
+Documentation only. The Observium section documented how to get the device
+polling and how to give the vendor objects names, but not how to make Observium
+actually *watch* any of them — so a reader could follow it exactly and end up
+with a proxy that correctly detects the switch being unreachable and an NMS that
+silently discards the result. That happened in practice.
+
+- **`### Observium` now covers binding `fwProxyIcmpStatus`.** Explains why the
+  device's own up/down is structurally blind to the real switch (address is
+  `127.0.0.1`, SNMP answered by the local proxy, so both succeed for as long as
+  the proxy lives), and that copying the MIB in gives names, not monitoring.
+  Full recipe: `$config['status']['static']` plus a `$config['mibs']['STATIC']`
+  state map, a full discovery, and a `status`-entity alert checker on
+  `status_event = alert`.
+- Three traps called out where they bite: `$config['status']['static']` instead
+  of a hand-inserted table row (discovery claims the former and soft-deletes the
+  latter, so data keeps updating while the UI hides it); a **full** discovery
+  rather than `-m alerts`, or the checker never binds; and `alert_tests.delay`
+  counting poll cycles rather than seconds.
+- `unknown(3)` documented as deliberately `warning` rather than `alert`, since
+  it is the transient startup state before `ping_fail_threshold` is met.
+- Suggests binding `fwProxyPollStatus` the same way.
+
+### Fixed
+
+- **Nagios `check_snmp` example for `fwProxyIcmpStatus` used `-c 1:1`**, which
+  goes critical on `unknown(3)` and `disabled(4)` as well as `down(2)` —
+  contradicting the tri-state design the rest of the document describes. Now
+  `-c @2:2`, which alerts only on `down`.
+
 ## [2.3.1] - 2026-08-31
 
 ### Changed
