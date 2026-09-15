@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here.
 
+## [2.3.3] - 2026-09-15
+
+### Changed
+
+Documentation only. Follow-up to 2.3.2, from actually performing the binding it
+described and hitting a trap it did not mention.
+
+- **The alert-association operator trap is now documented.** Observium silently
+  drops a querybuilder rule whose operator is not in its vocabulary, leaving an
+  empty `WHERE` clause, so the checker binds to *every* status entity on the
+  device rather than the one named. It must be `equals`, not `equal`. The
+  failure is invisible while only one entity exists and surfaces later as a
+  checker firing on the wrong object. Lists the valid operators and shows the
+  `parse_qb_ruleset()` one-liner for printing the generated SQL, where an empty
+  `WHERE` is the tell. Notes the web UI cannot produce this, since it picks the
+  operator from a dropdown.
+- **`fwProxyPollStatus` binding is now spelled out** rather than left as "the
+  same way": full state map and `$config['status']['static']` entry, the fact
+  that `stale(2)` needs `max(300, poll_interval * 3)` — 45 min at the default,
+  so three missed cycles rather than one — and why both `stale(2)` and
+  `error(3)` map to `alert`, including the deliberate coupling whereby
+  `poll_status()` returns `error(3)` on ICMP down, so a switch outage raises
+  both checkers. Demoting `error(3)` would mean never alerting on a proxy that
+  has failed every poll since startup, since an unset `last_poll_ok` returns
+  `error(3)` permanently and never reaches `stale(2)`.
+
 ## [2.3.2] - 2026-09-15
 
 ### Changed

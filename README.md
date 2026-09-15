@@ -416,9 +416,55 @@ condition `status_event` equals `alert`. Because the state map above assigns
 Leave the check delay at `0`: `alert_tests.delay` counts **poll cycles, not
 seconds**, and the proxy already debounces with `ping_fail_threshold`.
 
-`fwProxyPollStatus` (`.1.3.6.1.4.1.99999.1.3.0`, ok(1)/stale(2)/error(3)) is
-worth binding the same way — it is the object that tells you the API has gone
-away and the counters you are looking at are frozen.
+If you create the checker with SQL rather than the web UI, note that the
+association operator must be **`equals`**, not `equal`. Observium *silently
+drops* a querybuilder rule whose operator is not in its vocabulary — the checker
+is then left with an empty `WHERE` clause and binds to **every** status entity on
+the device instead of the one you named. That stays invisible while only one
+entity exists and surfaces later as a checker firing on the wrong object. The
+valid set is `equals`, `notequals`, `le`, `ge`, `lt`, `gt`, `match`, `notmatch`,
+`regexp`, `notregexp`, `in`, `notin`, `isnull`, `isnotnull`. To check what a
+ruleset actually matches, print the generated SQL — an empty `WHERE` is the tell:
+
+```php
+$a = dbFetchRow("SELECT * FROM alert_tests WHERE alert_test_id=<id>");
+echo parse_qb_ruleset($a['entity_type'], safe_json_decode($a['alert_assoc']));
+```
+
+The web UI picks the operator from a dropdown, so it cannot produce this.
+
+#### Bind fwProxyPollStatus the same way
+
+`fwProxyPollStatus` (`.1.3.6.1.4.1.99999.1.3.0`) is the object that tells you the
+API has gone away and the counters you are reading are frozen — arguably the more
+dangerous blind spot of the two, because frozen counters look like an idle switch
+rather than a broken feed.
+
+```php
+$config['mibs']['STATIC']['states']['fwProxyPollStatus'] = [
+    1 => ['name' => 'ok',    'event' => 'ok'],
+    2 => ['name' => 'stale', 'event' => 'alert'],
+    3 => ['name' => 'error', 'event' => 'alert'],
+];
+
+$config['status']['static'][] = [
+    'device_id' => <device_id>,
+    'oid'       => '.1.3.6.1.4.1.99999.1.3.0',
+    'type'      => 'fwProxyPollStatus',
+    'descr'     => 'MSP API poll status',
+];
+```
+
+`stale(2)` requires no successful poll for `stale_after`, which is
+`max(300, poll_interval * 3)` — 45 minutes at the default `poll_interval` of 900,
+so three missed cycles rather than one bad one.
+
+Both `stale(2)` and `error(3)` map to `alert` here, which is deliberate. Be aware
+that `poll_status()` returns `error(3)` when ICMP to the switch is down, so these
+two objects are coupled and a switch outage raises **both** checkers. That is the
+better trade: demoting `error(3)` to a warning would mean never alerting on a
+proxy that has failed every API poll since it started, because `last_poll_ok`
+being unset returns `error(3)` permanently and never reaches `stale(2)`.
 
 ### LibreNMS
 
